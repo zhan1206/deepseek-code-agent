@@ -1,0 +1,137 @@
+{
+  "name": "deepseek-agent",
+  "displayName": "DeepSeek Code Agent",
+  "description": "DeepSeek 模型驱动的智能代码助手 — 文件编辑 / Git / 搜索 / 调试",
+  "version": "0.4.0",
+  "publisher": "deepseek",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": ["AI", "Programming Languages"],
+  "keywords": ["ai", "deepseek", "assistant", "coding", "git"],
+  "license": "MIT",
+  "icon": "icon.png",
+  "activationEvents": ["onCommand:deepseek-agent.chat", "onCommand:deepseek-agent.run"],
+  "main": "./extension.js",
+  "contributes": {
+    "configuration": {
+      "title": "DeepSeek Agent",
+      "properties": {
+        "deepseek.agent.apiKey": {
+          "type": "string",
+          "default": "",
+          "description": "DeepSeek API Key（也支持环境变量 DEEPSEEK_API_KEY）"
+        },
+        "deepseek.agent.model": {
+          "type": "string",
+          "default": "deepseek-chat",
+          "enum": ["deepseek-chat", "deepseek-coder", "deepseek-reasoner"],
+          "description": "使用的模型"
+        },
+        "deepseek.agent.projectPath": {
+          "type": "string",
+          "default": "${workspaceFolder}",
+          "description": "项目根目录"
+        },
+        "deepseek.agent.maxSteps": {
+          "type": "integer",
+          "default": 50,
+          "description": "最大执行步数"
+        },
+        "deepseek.agent.mode": {
+          "type": "string",
+          "default": "react",
+          "enum": ["react", "plan"],
+          "description": "Agent 模式：react（推理+行动）或 plan（规划+执行）"
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "deepseek-agent.chat",
+        "title": "DeepSeek: 打开对话",
+        "description": "在侧边栏打开 DeepSeek Code Agent 对话窗口"
+      },
+      {
+        "command": "deepseek-agent.run",
+        "title": "DeepSeek: 执行任务",
+        "description": "输入一个任务并执行（快捷方式）"
+      },
+      {
+        "command": "deepseek-agent.commit",
+        "title": "DeepSeek: 智能提交",
+        "description": "分析当前变更，生成提交信息并提交"
+      },
+      {
+        "command": "deepseek-agent.review",
+        "title": "DeepSeek: 代码审查",
+        "description": "审查当前文件或 Diff"
+      },
+      {
+        "command": "deepseek-agent.fix",
+        "title": "DeepSeek: 修复问题",
+        "description": "修复当前文件的 lint/类型错误"
+      },
+      {
+        "command": "deepseek-agent.docs",
+        "title": "DeepSeek: 查文档",
+        "description": "查询当前光标处代码的官方文档"
+      },
+      {
+        "command": "deepseek-agent.stop",
+        "title": "DeepSeek: 停止执行",
+        "description": "停止当前运行中的 Agent"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "deepseek-agent.fix",
+          "when": "editorHasSelection",
+          "group": "deepseek@1"
+        },
+        {
+          "command": "deepseek-agent.review",
+          "when": "editorHasSelection",
+          "group": "deepseek@2"
+        },
+        {
+          "command": "deepseek-agent.docs",
+          "when": "editorTextFocus",
+          "group": "deepseek@3"
+        }
+      ],
+      "scm/title": [
+        {
+          "command": "deepseek-agent.commit",
+          "when": "scmProvider == git",
+          "group": "deepseek@1"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "deepseek-agent.chat",
+          "when": "false"
+        }
+      ]
+    },
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "deepseek-agent-view",
+          "title": "DeepSeek Agent",
+          "icon": "icon.png"
+        }
+      ]
+    },
+    "views": {
+      "deepseek-agent-view": [
+        {
+          "id": "deepseek-agent.main",
+          "name": "对话",
+          "type": "webview"
+        }
+      ]
+    }
+  }
+}
