@@ -18,6 +18,10 @@ deepseek-agent chat --project ./myproject
 | Phase 2 | DONE | 代码专用工具（Git x7 + Web + Docker 沙箱 + FastAPI） |
 | Phase 3 | DONE | 沙箱集成（Docker 镜像 + SandboxRunner）+ ChromaDB 向量记忆 + 检查点 |
 | Phase 4 | DONE | MCP Server/Client + VS Code 插件 |
+| v1.1 | DONE | 双模型 + 知识图谱 + TDD + 并行执行 + 变异测试 |
+| **v2.0** | **规划中** | 性能优化 + 语义重构 + DAP 调试 + 安全扫描 + 工具 SDK + A2A + 观测 |
+
+→ 详见 [v2.0 设计书](docs/v2.0-design.md)
 
 ## 工具集（18+ 个）
 
