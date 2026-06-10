@@ -465,29 +465,6 @@ def _check_shell_command(command: str):
             return False, f"禁止执行的命令（匹配黑名单）: {command[:80]}"
     return True, ""
 
-
-# Shell 黑名单正则
-_SHELL_BLACKLIST_PATTERNS = [
-    r"^\s*rm\s+-rf\s+/\s*$",
-    r"^\s*rm\s+-rf\s+/\S+",
-    r"mkfs\s",
-    r"dd\s+if=/dev/zero\s+of=/dev/",
-    r":\(\){:\|:&};:",
-    r"curl.*\|\s*sh",
-    r"wget.*\|\s*sh",
-    r"shutdown",
-    r"reboot",
-    r"init\s+6",
-    r"poweroff",
-]
-_SHELL_BLACKLIST_RE = [re.compile(p, re.IGNORECASE) for p in _SHELL_BLACKLIST_PATTERNS]
-
-def _check_shell_command(command: str):
-    for pat in _SHELL_BLACKLIST_RE:
-        if pat.search(command):
-            return False, f"禁止执行的命令（匹配黑名单）: {command[:80]}"
-    return True, ""
-
 @tool(
     name="run_shell",
     description="执行 Shell 命令，返回 stdout/stderr。",
@@ -604,22 +581,4 @@ async def kill_process(pid: int) -> str:
     except Exception as e:
         return ToolResult.fail(f"终止进程 {pid} 失败: {str(e)}").to_str()
 
-# ── kill_process ────────────────────────────────────────────────────────
 
-@tool(
-    name="kill_process",
-    description="终止指定 PID 的进程。",
-    danger_level=DangerLevel.SENSITIVE,
-)
-async def kill_process(pid: int) -> str:
-    """终止指定 PID 的进程。"""
-    import signal
-    try:
-        os.kill(pid, signal.SIGTERM)
-        return ToolResult.ok(f"进程 {pid} 已终止（SIGTERM）").to_str()
-    except ProcessLookupError:
-        return ToolResult.fail(f"进程 {pid} 不存在").to_str()
-    except PermissionError:
-        return ToolResult.fail(f"无权限终止进程 {pid}").to_str()
-    except Exception as e:
-        return ToolResult.fail(f"终止进程 {pid} 失败: {str(e)}").to_str()

@@ -186,6 +186,9 @@ class LoopConfig:
     max_execution_time: float = 600.0     # 10 分钟
     max_reflections: int = 2              # 反思上限
     reflection_threshold: float = 0.7     # 质量分数阈值
+    # ── 双模型分离 ─────────────────────────────────────────────
+    planner_model: str = "deepseek-reasoner"  # 规划/推理专用模型
+    executor_model: str = "deepseek-chat"      # 执行/对话专用模型
 
 
 class PermissionCallback:
@@ -319,13 +322,16 @@ class AgentLoop:
             tools = self.registry.get_schemas()
 
             try:
-                async for resp in self.client._stream_chat(messages, tools, "auto"):
+                # ── 双模型：规划/推理用 reasoner，执行用 chat ──────────────
+                active_model = self.config.planner_model
+                async for resp in self.client._stream_chat(messages, tools, "auto", model=active_model):
                     # 阶段性 yield
                     if resp.thinking:
                         yield resp  # 思考过程
 
                     if resp.tool_calls:
-                        # 执行工具调用
+                        # 工具执行阶段切换为 executor_model
+                        tool_model = self.config.executor_model
                         results = await self._execute_tool_calls(resp.tool_calls)
                         # 注入结果
                         for tc_id, result in results.items():

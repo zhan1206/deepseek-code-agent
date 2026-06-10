@@ -18,8 +18,9 @@ from enum import IntEnum
 
 class DangerLevel(IntEnum):
     SAFE = 0       # 读文件、搜索，无需确认
-    SENSITIVE = 1  # 写文件、网络请求，需确认
-    DANGEROUS = 2  # 删除、执行命令，双重确认
+    MODERATE = 1  # 写文件、网络请求，需确认
+    SENSITIVE = 2  # 高风险写操作，需确认
+    DANGEROUS = 3  # 删除、执行命令，双重确认
 
 
 # ── 工具结果包装器 ─────────────────────────────────────────────────────────
@@ -31,12 +32,11 @@ class ToolResult:
     data: Any = None
     error: Optional[str] = None
 
+    def to_dict(self) -> Dict[str, Any]:
+        return {"success": self.success, "data": self.data, "error": self.error}
+
     def to_str(self) -> str:
-        return json.dumps(
-            {"success": self.success, "data": self.data, "error": self.error},
-            ensure_ascii=False,
-            default=str,
-        )
+        return json.dumps(self.to_dict(), ensure_ascii=False, default=str)
 
     @classmethod
     def ok(cls, data: Any) -> "ToolResult":

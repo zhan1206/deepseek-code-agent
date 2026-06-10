@@ -31,6 +31,10 @@ setup(
         "memory": [
             "chromadb>=0.4.0",
         ],
+        "knowledge": [
+            "networkx>=3.0",
+            "scikit-learn>=1.0",
+        ],
         "sandbox": [
             "docker>=7.0",
         ],
@@ -44,6 +48,7 @@ setup(
             "fastapi>=0.110.0",
             "uvicorn>=0.29.0",
             "pydantic>=2.0",
+            "networkx>=3.0",
             "pytest>=8.0",
             "pytest-asyncio>=0.23.0",
         ],

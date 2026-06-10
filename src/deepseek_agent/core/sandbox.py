@@ -144,9 +144,10 @@ class DockerSandbox:
             container = client.containers.get(self._container_id)
 
             # exec_create → exec_start
+            import shlex
             exec_id = container.client.api.exec_create(
                 container.id,
-                f"bash -c {command!r}",
+                ["bash", "-c", command],
                 user="sandbox",
                 workdir=self.config.work_dir,
             )

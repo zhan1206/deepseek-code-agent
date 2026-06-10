@@ -212,15 +212,19 @@ class MCPServer:
         """
         启动 stdio 协议循环（MCP 标准传输方式）。
 
-        从 stdin 读取 JSON-RPC 请求，
+        从 stdin 异步读取 JSON-RPC 请求，
         向 stdout 写入 JSON-RPC 响应。
         """
         import sys
+        import asyncio
 
         self.register_agent_tools()
-        reader = sys.stdin
+        loop = asyncio.get_event_loop()
 
-        for line in reader:
+        while True:
+            line = await loop.run_in_executor(None, sys.stdin.readline)
+            if not line:
+                break
             line = line.strip()
             if not line:
                 continue

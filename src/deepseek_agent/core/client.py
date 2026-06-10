@@ -135,6 +135,7 @@ class DeepSeekClient:
         tools: Optional[List[Dict]] = None,
         tool_choice: str = "auto",
         stream: bool = False,
+        model: Optional[str] = None,
         **kwargs,
     ) -> Union[Response, Generator[Response, None, None]]:
         """
@@ -145,6 +146,7 @@ class DeepSeekClient:
             tools: 工具 schema 列表（OpenAI 格式）
             tool_choice: "auto" | "none" | {"type": "function", "function": {"name": "..."}}
             stream: 是否流式
+            model: 覆盖默认模型（如指定则使用此模型而非构造时的 self.model）
             **kwargs: 透传给 API body
 
         Returns:
@@ -152,10 +154,10 @@ class DeepSeekClient:
             stream=True: 生成器，逐步 yield Response（增量）
         """
         if stream:
-            return self._stream_chat(messages, tools, tool_choice, **kwargs)
+            return self._stream_chat(messages, tools, tool_choice, model=model, **kwargs)
 
         # 非流式
-        payload = self._build_payload(messages, tools, tool_choice, stream=False, **kwargs)
+        payload = self._build_payload(messages, tools, tool_choice, stream=False, model=model, **kwargs)
         result = await self._request(payload)
         return self._parse_response(result)
 
@@ -203,10 +205,12 @@ class DeepSeekClient:
         tools: Optional[List[Dict]],
         tool_choice: str,
         stream: bool,
+        model: Optional[str] = None,
         **kwargs,
     ) -> Dict[str, Any]:
+        active_model = model or self.model
         payload = {
-            "model": self.model,
+            "model": active_model,
             "messages": messages,
             "temperature": kwargs.pop("temperature", self.temperature),
             "max_tokens": kwargs.pop("max_tokens", self.max_tokens),
@@ -215,6 +219,11 @@ class DeepSeekClient:
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = tool_choice
+        # DeepSeek prefix (FIM / forced output format)
+        if "prefix" in kwargs:
+            payload["prefix"] = kwargs.pop("prefix")
+        if "extra_body" in kwargs:
+            payload.update(kwargs.pop("extra_body"))
         if kwargs:
             payload.update(kwargs)
         return payload
@@ -287,9 +296,11 @@ class DeepSeekClient:
         messages: List[Dict[str, str]],
         tools: Optional[List[Dict]],
         tool_choice: str,
+        model: Optional[str] = None,
         **kwargs,
     ) -> AsyncGenerator[Response, None]:
-        payload = self._build_payload(messages, tools, tool_choice, stream=True, **kwargs)
+        active_model = model or self.model
+        payload = self._build_payload(messages, tools, tool_choice, stream=True, model=active_model, **kwargs)
 
         async with self._client.stream("POST", "/chat/completions", json=payload) as resp:
             if resp.status_code != 200:
@@ -300,7 +311,7 @@ class DeepSeekClient:
             thinking_buf: List[str] = []
             content_buf: List[str] = []
             in_thinking = False
-            is_reasoner = self.model == "deepseek-reasoner"
+            is_reasoner = active_model == "deepseek-reasoner"
             first_chunk_sent = False
 
             async for line in resp.aiter_lines():

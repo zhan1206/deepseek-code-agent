@@ -58,16 +58,7 @@ class MCPClient:
         """
         merged_env = {**subprocess.os.environ, **(env or {})}
 
-        self._process = subprocess.Popen(
-            command,
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=False,
-            env=merged_env,
-        )
-
-        # asyncio 管道
+        # asyncio subprocess（仅启动一次，避免重复 fork 两个进程）
         self._stdout_reader = asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
@@ -77,7 +68,6 @@ class MCPClient:
         )
 
         proc = await self._stdout_reader
-        self._process = None  # asyncio 版本
 
         self._reader_task = asyncio.create_task(self._read_loop(proc.stdout))
 

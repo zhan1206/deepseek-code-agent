@@ -1,15 +1,31 @@
 """
-FastAPI 服务 — HTTP API + WebSocket 流式端点。
+FastAPI 服务 — HTTP API + WebSocket 流式端点 + Diff 审批管理。
+
+REST 端点:
+  GET  /health
+  POST /session          — 创建会话
+  GET  /session/{id}    — 会话状态
+  DELETE /session/{id}  — 删除会话
+  POST /session/{id}/run  — 运行任务（非流式）
+  POST /diff/preview     — 生成编辑预览（不落盘）
+  POST /diff/apply      — 应用已审批的编辑
+  POST /diff/reject     — 拒绝编辑
+
+WebSocket /ws/{session_id}:
+  接收: {type:"run", task:"..."} | {type:"approval_response", approval_id:"...", approved:bool, modified_args:{}}
+  发送: {type:"chunk", content:"...", tool_calls:[...]} | {type:"approval_request", ...} | {type:"done"} | {type:"error"}
 """
 
 from __future__ import annotations
 
 import asyncio
+import difflib
 import json
 import os
 import uuid
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, HTTPException
@@ -49,6 +65,142 @@ class RunResponse(BaseModel):
     status: str
 
 
+class DiffPreviewRequest(BaseModel):
+    session_id: str
+    tool: str
+    args: Dict[str, Any]
+
+
+class DiffPreviewResponse(BaseModel):
+    preview_id: str
+    file: str
+    original: str
+    modified: str
+    hunks: List[Dict[str, Any]]
+
+
+class DiffApplyRequest(BaseModel):
+    preview_id: str
+    session_id: str
+    modified_hunks: Optional[List[Dict[str, Any]]] = None  # 用户修改后的 hunks
+
+
+# ── Diff 管理 ───────────────────────────────────────────────────────────
+
+@dataclass
+class PendingDiff:
+    """单个待审批的编辑。"""
+    preview_id: str
+    session_id: str
+    tool: str          # edit_file | write_file | delete_file
+    args: Dict[str, Any]
+    file: str
+    original: str      # 编辑前内容
+    modified: str       # 编辑后内容（或空串表示删除）
+    hunks: List[Dict[str, Any]] = field(default_factory=list)
+    approved: bool = False
+    modified_hunks: Optional[List[Dict[str, Any]]] = None
+
+
+class DiffManager:
+    """全局 Diff 预览管理器。"""
+
+    def __init__(self):
+        self._store: Dict[str, PendingDiff] = {}
+
+    def create_preview(
+        self,
+        session_id: str,
+        tool: str,
+        args: Dict[str, Any],
+        original: str,
+        modified: str,
+    ) -> PendingDiff:
+        """生成预览并存储。"""
+        preview_id = str(uuid.uuid4())[:8]
+        hunks = self._build_hunks(original, modified)
+
+        diff = PendingDiff(
+            preview_id=preview_id,
+            session_id=session_id,
+            tool=tool,
+            args=args,
+            file=args.get("path", args.get("file", "")),
+            original=original,
+            modified=modified,
+            hunks=hunks,
+        )
+        self._store[preview_id] = diff
+        return diff
+
+    @staticmethod
+    def _build_hunks(original: str, modified: str) -> List[Dict[str, Any]]:
+        """用 difflib 生成 unified diff hunks。"""
+        orig_lines = original.splitlines(keepends=True)
+        mod_lines = modified.splitlines(keepends=True)
+
+        unified = list(difflib.unified_diff(
+            orig_lines, mod_lines,
+            fromfile="original", tofile="modified",
+            lineterm="",
+        ))
+
+        hunks = []
+        i = 0
+        while i < len(unified):
+            line = unified[i]
+            if line.startswith("@@"):
+                # 解析 @@ -a,b +c,d @@
+                parts = line.split(" ")
+                meta = parts[1]
+                m = meta.split(",")
+                old_start = int(m[0][1:])
+                old_count = int(m[0][1:]) if len(m) == 1 else int(m[1])
+                new_start = int(parts[2][1:])
+                new_count = int(parts[2][1:]) if len(parts[2].split(",")) == 1 else int(parts[2].split(",")[1])
+
+                hunk_lines = [line]
+                i += 1
+                while i < len(unified) and not unified[i].startswith("@@"):
+                    hunk_lines.append(unified[i])
+                    i += 1
+
+                hunks.append({
+                    "old_start": old_start,
+                    "old_count": old_count,
+                    "new_start": new_start,
+                    "new_count": new_count,
+                    "lines": hunk_lines,
+                })
+            else:
+                i += 1
+        return hunks
+
+    def apply(self, preview_id: str, modified_hunks: Optional[List[Dict[str, Any]]] = None) -> PendingDiff:
+        """标记为已批准，可附带用户修改后的 hunks。"""
+        diff = self._store.get(preview_id)
+        if not diff:
+            raise ValueError(f"Preview {preview_id} not found")
+        diff.approved = True
+        diff.modified_hunks = modified_hunks
+        return diff
+
+    def reject(self, preview_id: str) -> None:
+        """标记为已拒绝。"""
+        self._store.pop(preview_id, None)
+
+    def get(self, preview_id: str) -> Optional[PendingDiff]:
+        return self._store.get(preview_id)
+
+    def cleanup_session(self, session_id: str) -> None:
+        """清理会话相关的所有预览。"""
+        to_remove = [k for k, v in self._store.items() if v.session_id == session_id]
+        for k in to_remove:
+            self._store.pop(k, None)
+
+
+# ── 会话 ────────────────────────────────────────────────────────────────
+
 @dataclass
 class Session:
     id: str
@@ -60,9 +212,8 @@ class Session:
     config: Dict[str, Any] = field(default_factory=dict)
 
 
-# ── 全局状态 ─────────────────────────────────────────────────────────────
-
 sessions: Dict[str, Session] = {}
+diff_manager = DiffManager()
 
 
 def create_session(session_id: str, project: str, model: str, mode: str) -> Session:
@@ -74,17 +225,14 @@ def create_session(session_id: str, project: str, model: str, mode: str) -> Sess
     client = DeepSeekClient(api_key=api_key, model=model)
 
     registry = ToolRegistry()
-    # 注册文件系统工具
     for fn in [read_file, write_file, edit_file, list_directory,
                search_file, search_content, delete_file, run_shell, run_test]:
-        registry.register_func(fn)
-    # 注册 Git 工具
+        registry.register(fn)
     for fn in [git_diff, git_log, git_status, git_checkout,
                git_commit, git_push, git_branch]:
-        registry.register_func(fn)
-    # 注册 Web 工具
-    registry.register_func(web_fetch)
-    registry.register_func(read_docs)
+        registry.register(fn)
+    registry.register(web_fetch)
+    registry.register(read_docs)
 
     memory = MemoryManager(
         project_path=project,
@@ -119,14 +267,14 @@ def create_session(session_id: str, project: str, model: str, mode: str) -> Sess
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     yield
-    # 清理所有会话
     for s in sessions.values():
         await s.client.close()
+        diff_manager.cleanup_session(s.id)
 
 
 app = FastAPI(
     title="DeepSeek Code Agent API",
-    version="0.2.0",
+    version="0.3.0",
     lifespan=lifespan,
 )
 
@@ -147,7 +295,9 @@ async def health():
 
 
 @app.post("/session", response_model=RunResponse)
-async def create_session_endpoint(project: str = ".", model: str = "deepseek-chat", mode: str = "react"):
+async def create_session_endpoint(
+    project: str = ".", model: str = "deepseek-chat", mode: str = "react"
+):
     """创建新会话。"""
     session_id = str(uuid.uuid4())[:8]
     try:
@@ -177,6 +327,7 @@ async def delete_session(session_id: str):
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="会话不存在")
     s = sessions.pop(session_id)
+    diff_manager.cleanup_session(session_id)
     await s.client.close()
     return {"status": "deleted"}
 
@@ -186,15 +337,111 @@ async def run_task(session_id: str, request: RunRequest):
     """运行单次任务（非流式）。"""
     if session_id not in sessions:
         raise HTTPException(status_code=404, detail="会话不存在")
-
     s = sessions[session_id]
     results = []
-
     async for resp in s.agent.run(request.task):
         if resp.content:
             results.append(resp.content)
-
     return {"session_id": session_id, "responses": results}
+
+
+# ── Diff 审批 API ──────────────────────────────────────────────────────
+
+@app.post("/diff/preview", response_model=DiffPreviewResponse)
+async def diff_preview(req: DiffPreviewRequest):
+    """
+    生成文件编辑预览（不落盘）。
+    前端在收到 tool_call 事件后调用此端点获取 diff，然后向用户展示。
+    """
+    if req.session_id not in sessions:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    s = sessions[req.session_id]
+    tool = req.tool
+    args = req.args
+
+    try:
+        original = ""
+        if tool == "write_file":
+            path = args.get("path", args.get("file", ""))
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    original = f.read()
+            modified = args.get("content", "")
+        elif tool == "edit_file":
+            path = args.get("path", args.get("file", ""))
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf" if tool != "delete_file" else "utf-8") as f:
+                    original = f.read()
+            # 模拟 apply_edit 后的内容（不做实际修改）
+            modified = original
+            if "old_text" in args and "new_text" in args:
+                modified = original.replace(args["old_text"], args["new_text"], 1)
+            elif "content" in args:
+                modified = args["content"]
+        elif tool == "delete_file":
+            path = args.get("path", args.get("file", ""))
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    original = f.read()
+            modified = ""
+        else:
+            raise HTTPException(status_code=400, detail=f"Unsupported tool: {tool}")
+
+        diff = diff_manager.create_preview(
+            session_id=req.session_id,
+            tool=tool,
+            args=args,
+            original=original,
+            modified=modified,
+        )
+
+        return DiffPreviewResponse(
+            preview_id=diff.preview_id,
+            file=diff.file,
+            original=diff.original,
+            modified=diff.modified,
+            hunks=diff.hunks,
+        )
+
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail=f"File not found: {args.get('path')}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/diff/apply")
+async def diff_apply(req: DiffApplyRequest):
+    """
+    应用已审批的编辑。
+    前端发送用户决策后调用，后端执行真实写入。
+    """
+    if req.session_id not in sessions:
+        raise HTTPException(status_code=404, detail="会话不存在")
+
+    diff = diff_manager.get(req.preview_id)
+    if not diff:
+        raise HTTPException(status_code=404, detail=f"Preview {req.preview_id} not found or already processed")
+
+    # 执行真实工具调用
+    s = sessions[req.session_id]
+    tool_fn = s.registry.get_tool(diff.tool)
+    if not tool_fn:
+        raise HTTPException(status_code=500, detail=f"Tool not found: {diff.tool}")
+
+    try:
+        result = await tool_fn(**diff.args)
+        diff_manager._store.pop(req.preview_id, None)  # 清理
+        return {"status": "applied", "preview_id": req.preview_id, "result": result.to_dict()}
+    except Exception as e:
+        return {"status": "error", "preview_id": req.preview_id, "error": str(e)}
+
+
+@app.post("/diff/reject")
+async def diff_reject(preview_id: str, session_id: str):
+    """拒绝编辑预览。"""
+    diff_manager.reject(preview_id)
+    return {"status": "rejected", "preview_id": preview_id}
 
 
 # ── WebSocket 流式端点 ─────────────────────────────────────────────────
@@ -202,10 +449,10 @@ async def run_task(session_id: str, request: RunRequest):
 @app.websocket("/ws/{session_id}")
 async def websocket_agent(websocket: WebSocket, session_id: str):
     """
-    WebSocket 双向通信，支持：
-    - 发送任务
-    - 接收流式响应（思考/工具调用/结果/最终回复）
-    - 发送审批决策（approve/reject）
+    WebSocket 双向通信:
+    - 发送 {type:"run", task:"..."} → 启动任务
+    - 接收流式响应 (chunk / approval_request / done / error)
+    - 发送 {type:"approval_response", approval_id:"...", approved:bool}
     """
     if session_id not in sessions:
         await websocket.close(code=4004, reason="Session not found")
@@ -216,13 +463,13 @@ async def websocket_agent(websocket: WebSocket, session_id: str):
 
     pending_approvals: Dict[str, Any] = {}
 
-    # 替换审批回调为 WebSocket 版本
     class WSApprovalCallback:
+        """WebSocket 驱动的审批回调。"""
+
         async def requires_approval(self, tool_name, args, danger_level):
-            return True  # WebSocket 模式下所有敏感操作都请求确认
+            return True
 
         async def request_approval(self, tool_name, args, danger_level):
-            # 通过 WebSocket 发送审批请求
             approval_id = str(uuid.uuid4())[:8]
             pending_approvals[approval_id] = {
                 "tool_name": tool_name,
@@ -237,19 +484,18 @@ async def websocket_agent(websocket: WebSocket, session_id: str):
                 "danger_level": pending_approvals[approval_id]["danger_level"],
             })
 
-            # 等待审批结果（超时 5 分钟）
+            # 自动拒绝（前端会主动发 approval_response，这里设 30s 超时）
             try:
                 msg = await asyncio.wait_for(websocket.receive_json(), timeout=300)
-                approval_type = msg.get("type")
-                if approval_type == "approval_response":
+                if msg.get("type") == "approval_response":
                     rid = msg.get("approval_id")
                     if rid == approval_id:
                         approved = msg.get("approved", False)
                         modified = msg.get("modified_args")
-                        del pending_approvals[rid]
+                        pending_approvals.pop(rid, None)
                         return approved, modified
             except asyncio.TimeoutError:
-                del pending_approvals[approval_id]
+                pending_approvals.pop(approval_id, None)
                 return False, None
             return False, None
 
@@ -277,13 +523,13 @@ async def websocket_agent(websocket: WebSocket, session_id: str):
                     if resp.content:
                         event["content"] = resp.content
 
-                    if len(event) > 1:  # 至少有一点内容
+                    if len(event) > 1:
                         await websocket.send_json(event)
 
                 await websocket.send_json({"type": "done"})
 
             elif msg_type == "approval_response":
-                # 已在 WSApprovalCallback 中处理
+                # 审批响应（已在 WSApprovalCallback 中处理）
                 pass
 
             elif msg_type == "ping":
@@ -300,3 +546,7 @@ async def websocket_agent(websocket: WebSocket, session_id: str):
 def run_server(host: str = "0.0.0.0", port: int = 8000):
     import uvicorn
     uvicorn.run(app, host=host, port=port)
+
+
+if __name__ == "__main__":
+    run_server()
