@@ -34,9 +34,17 @@ setup(
         "knowledge": [
             "networkx>=3.0",
             "scikit-learn>=1.0",
+            "watchdog>=3.0",
         ],
         "security": [
             "bandit>=1.7",
+        ],
+        "debug": [
+            "debugpy>=1.8",
+        ],
+        "telemetry": [
+            "opentelemetry-api>=1.20",
+            "opentelemetry-sdk>=1.20",
         ],
         "sandbox": [
             "docker>=7.0",
@@ -54,6 +62,9 @@ setup(
             "networkx>=3.0",
             "bandit>=1.7",
             "watchdog>=3.0",
+            "debugpy>=1.8",
+            "opentelemetry-api>=1.20",
+            "opentelemetry-sdk>=1.20",
             "pytest>=8.0",
             "pytest-asyncio>=0.23.0",
             "pytest-benchmark>=4.0",

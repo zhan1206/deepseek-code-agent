@@ -19,6 +19,8 @@ from .refactor import auto_refactor
 from .arch_check import arch_check
 from .benchmark import benchmark
 
+from .debug import debug_start, debug_continue, debug_step_over, debug_step_into, debug_get_variables, debug_evaluate, debug_stop
+
 __all__ = [
     # Base
     "Tool", "ToolRegistry", "ToolResult", "DangerLevel", "tool", "generate_schema",
@@ -47,4 +49,7 @@ __all__ = [
     "arch_check",
     # Benchmark
     "benchmark",
+    # Debug
+    "debug_start", "debug_continue", "debug_step_over", "debug_step_into",
+    "debug_get_variables", "debug_evaluate", "debug_stop",
 ]
