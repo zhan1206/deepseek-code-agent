@@ -220,6 +220,20 @@ async def edit_file(
         if content == original_content:
             return ToolResult.fail("编辑后内容未发生变化").to_str()
 
+        # ── 安全扫描钩子 ──────────────────────────────────────────
+        scanner = SecurityScanner(min_severity="MEDIUM")
+        is_safe, findings = scanner.scan_content_before_write(content, path, block_on_high=True)
+        if not is_safe:
+            high_findings = [f for f in findings if f.severity == "HIGH"]
+            issues = "\n".join(
+                f"  🔴 [{f.rule_id}] {f.message} (行 {f.line_number})"
+                for f in high_findings
+            )
+            return ToolResult.fail(
+                f"编辑被安全扫描阻止：发现 {len(high_findings)} 个高危漏洞\n{issues}\n"
+                f"如需强制编辑，请先修复安全问题或调整安全策略。"
+            ).to_str()
+
         # 原子写入
         fd, tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
         try:

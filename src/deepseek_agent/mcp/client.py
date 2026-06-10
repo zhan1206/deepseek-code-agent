@@ -1,5 +1,9 @@
 """
 MCP Client — 连接外部 MCP Server（如 Claude Desktop 的其他 Server）。
+
+v2.0 新增：
+- SSE 传输（MCPSSEClient）
+- 工具桥接（MCPToolBridge）
 """
 
 from __future__ import annotations
@@ -27,16 +31,10 @@ class MCPClient:
     """
     MCP Client — 连接 MCP Server 并调用工具。
 
-    支持两种连接方式：
-    1. stdio 模式（子进程，本模块默认）
-    2. HTTP 模式（未来扩展，需 Server 支持 SSE）
-
-    用法：
-        client = MCPClient()
-        await client.connect(["python", "-m", "deepseek_agent.mcp.server"])
-        tools = await client.list_tools()
-        result = await client.call_tool("read_file", {"path": "./README.md"})
-        await client.disconnect()
+    支持三种连接方式：
+    1. stdio 模式（子进程）
+    2. SSE 模式（HTTP Server-Sent Events）— 使用 MCPSSEClient
+    3. 工具桥接 — 使用 MCPToolBridge
     """
 
     def __init__(self):
@@ -49,16 +47,9 @@ class MCPClient:
     # ── 连接 ──────────────────────────────────────────────
 
     async def connect(self, command: List[str], env: Optional[Dict[str, str]] = None) -> None:
-        """
-        启动 MCP Server 并握手。
-
-        Args:
-            command: Server 启动命令，如 ["python", "-m", "deepseek_agent.mcp.server"]
-            env: 额外环境变量
-        """
+        """启动 MCP Server 并握手（stdio 模式）。"""
         merged_env = {**subprocess.os.environ, **(env or {})}
 
-        # asyncio subprocess（仅启动一次，避免重复 fork 两个进程）
         self._stdout_reader = asyncio.create_subprocess_exec(
             *command,
             stdin=asyncio.subprocess.PIPE,
@@ -68,29 +59,24 @@ class MCPClient:
         )
 
         proc = await self._stdout_reader
-
         self._reader_task = asyncio.create_task(self._read_loop(proc.stdout))
 
         # 发送 initialize
-        init_result = await self._send_request("initialize", {
+        await self._send_request("initialize", {
             "protocolVersion": "2024-11-05",
             "clientInfo": {
                 "name": "deepseek-agent-mcp-client",
-                "version": "0.4.0",
+                "version": "2.0.0",
             },
             "capabilities": {},
         })
 
-        # 发送 initialized 通知
         await self._send_notification("initialized", {})
-
-        # 获取工具列表
         tools_result = await self._send_request("tools/list", {})
         self._tools = tools_result.get("tools", [])
         self._connected = True
 
     async def _read_loop(self, stdout: asyncio.StreamReader) -> None:
-        """持续读取 Server 响应。"""
         while True:
             try:
                 line = await stdout.readline()
@@ -105,7 +91,6 @@ class MCPClient:
                 break
 
     async def _handle_response(self, text: str) -> None:
-        """处理收到的 JSON-RPC 消息。"""
         try:
             data = json.loads(text)
             resp = JSONRPCResponse(**data)
@@ -124,7 +109,6 @@ class MCPClient:
     async def _send_request(
         self, method: str, params: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """发送 JSON-RPC 请求并等待响应。"""
         self._request_id += 1
         req_id = self._request_id
 
@@ -147,7 +131,6 @@ class MCPClient:
         return await future
 
     async def _send_notification(self, method: str, params: Optional[Dict[str, Any]] = None) -> None:
-        """发送 JSON-RPC 通知（无响应）。"""
         proc = await self._get_process()
         if not proc:
             return
@@ -167,7 +150,6 @@ class MCPClient:
     # ── 工具调用 ──────────────────────────────────────────
 
     async def list_tools(self) -> List[Dict[str, Any]]:
-        """列出所有可用工具。"""
         if not self._tools:
             result = await self._send_request("tools/list", {})
             self._tools = result.get("tools", [])
@@ -178,12 +160,6 @@ class MCPClient:
         name: str,
         arguments: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
-        """
-        调用 MCP 工具。
-
-        Returns:
-            {"content": [{"type": "text", "text": "..."}]}
-        """
         result = await self._send_request("tools/call", {
             "name": name,
             "arguments": arguments or {},
@@ -193,11 +169,10 @@ class MCPClient:
     # ── 断开连接 ──────────────────────────────────────────
 
     async def disconnect(self) -> None:
-        """关闭 MCP 连接。"""
         self._connected = False
         if self._reader_task:
             self._reader_task.cancel()
-        if self._stdout_reader:
+        if hasattr(self, '_stdout_reader') and self._stdout_reader:
             try:
                 proc = await self._stdout_reader
                 proc.terminate()
@@ -207,3 +182,205 @@ class MCPClient:
     @property
     def is_connected(self) -> bool:
         return self._connected
+
+
+# ── SSE 传输 ──────────────────────────────────────────────────────────
+
+class MCPSSEClient(MCPClient):
+    """
+    MCP SSE Client — 通过 HTTP + Server-Sent Events 连接 MCP Server。
+
+    适用于远程 MCP 服务器（如 Puppeteer、Postgres MCP Server）。
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._base_url = ""
+        self._session: Optional[Any] = None
+
+    async def connect_sse(self, url: str, api_key: Optional[str] = None) -> None:
+        """
+        通过 SSE 连接 MCP Server。
+
+        Args:
+            url: Server URL（如 http://localhost:3001/sse）
+            api_key: 可选 API Key
+        """
+        import httpx
+
+        self._base_url = url.rstrip("/")
+        headers = {}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+
+        self._session = httpx.AsyncClient(
+            timeout=httpx.Timeout(30.0),
+            headers=headers,
+        )
+
+        # 初始化
+        init_result = await self._send_http_request("initialize", {
+            "protocolVersion": "2024-11-05",
+            "clientInfo": {
+                "name": "deepseek-agent-sse-client",
+                "version": "2.0.0",
+            },
+            "capabilities": {},
+        })
+
+        await self._send_http_notification("initialized", {})
+
+        tools_result = await self._send_http_request("tools/list", {})
+        self._tools = tools_result.get("tools", [])
+        self._connected = True
+
+    async def _send_http_request(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        if not self._session:
+            raise RuntimeError("未连接")
+
+        self._request_id += 1
+        request = JSONRPCRequest(
+            jsonrpc="2.0",
+            method=method,
+            params=params,
+            id=self._request_id,
+        )
+
+        resp = await self._session.post(
+            f"{self._base_url}/message",
+            json=request.model_dump(exclude_none=True),
+        )
+
+        if resp.status_code != 200:
+            raise Exception(f"MCP HTTP 请求失败: {resp.status_code}")
+
+        data = resp.json()
+        if data.get("error"):
+            raise Exception(data["error"].get("message", "Unknown error"))
+        return data.get("result", {})
+
+    async def _send_http_notification(
+        self, method: str, params: Optional[Dict[str, Any]] = None
+    ) -> None:
+        if not self._session:
+            return
+        request = JSONRPCRequest(jsonrpc="2.0", method=method, params=params)
+        await self._session.post(
+            f"{self._base_url}/message",
+            json=request.model_dump(exclude_none=True),
+        )
+
+    async def call_tool(
+        self,
+        name: str,
+        arguments: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        return await self._send_http_request("tools/call", {
+            "name": name,
+            "arguments": arguments or {},
+        })
+
+    async def disconnect(self) -> None:
+        self._connected = False
+        if self._session:
+            await self._session.aclose()
+
+
+# ── 工具桥接 ──────────────────────────────────────────────────────────
+
+class MCPToolBridge:
+    """
+    MCP 工具桥接 — 将 MCP Server 的工具自动注册到 ToolRegistry。
+
+    用法：
+        bridge = MCPToolBridge(registry)
+        await bridge.connect_stdio(["python", "-m", "some_mcp_server"])
+        # 或
+        await bridge.connect_sse("http://localhost:3001/sse")
+        # MCP 工具现在在 registry 中可用
+    """
+
+    def __init__(self, registry: Any):
+        self.registry = registry
+        self._clients: List[MCPClient] = []
+        self._bridged_tools: Dict[str, MCPClient] = {}
+
+    async def connect_stdio(self, command: List[str], env: Optional[Dict[str, str]] = None) -> int:
+        client = MCPClient()
+        await client.connect(command, env)
+        return self._register_tools(client)
+
+    async def connect_sse(self, url: str, api_key: Optional[str] = None) -> int:
+        client = MCPSSEClient()
+        await client.connect_sse(url, api_key)
+        return self._register_tools(client)
+
+    def _register_tools(self, client: MCPClient) -> int:
+        from ..tools.base import Tool, ToolResult, DangerLevel
+
+        count = 0
+        for tool_info in client._tools:
+            name = tool_info.get("name", "")
+            if not name:
+                continue
+
+            bridged_name = f"mcp_{name}"
+            description = tool_info.get("description", "")
+
+            async def _make_func(client_ref: MCPClient, tool_name: str) -> Any:
+                async def _bridged_func(**kwargs) -> str:
+                    try:
+                        result = await client_ref.call_tool(tool_name, kwargs)
+                        content = result.get("content", [])
+                        texts = [c.get("text", "") for c in content if c.get("type") == "text"]
+                        return ToolResult.ok("\n".join(texts) or "(无输出)").to_str()
+                    except Exception as e:
+                        return ToolResult.fail(f"MCP 工具调用失败: {e}").to_str()
+                _bridged_func.__name__ = bridged_name
+                _bridged_func.__doc__ = description
+                return _bridged_func
+
+            # Synchronous closure creation
+            def _make_sync(c: MCPClient, tn: str, desc: str):
+                async def f(**kwargs) -> str:
+                    try:
+                        result = await c.call_tool(tn, kwargs)
+                        content = result.get("content", [])
+                        texts = [c2.get("text", "") for c2 in content if c2.get("type") == "text"]
+                        return ToolResult.ok("\n".join(texts) or "(无输出)").to_str()
+                    except Exception as e:
+                        return ToolResult.fail(f"MCP 工具调用失败: {e}").to_str()
+                f.__name__ = f"mcp_{tn}"
+                f.__doc__ = desc
+                return f
+
+            bridged_func = _make_sync(client, name, description)
+
+            bridged_tool = Tool(
+                name=bridged_name,
+                description=f"[MCP] {description}",
+                func=bridged_func,
+                danger_level=DangerLevel.SENSITIVE,
+                require_approval=True,
+            )
+
+            try:
+                self.registry.register(bridged_tool)
+                self._bridged_tools[bridged_name] = client
+                count += 1
+            except Exception:
+                pass
+
+        self._clients.append(client)
+        return count
+
+    async def disconnect_all(self) -> None:
+        for client in self._clients:
+            await client.disconnect()
+        self._clients.clear()
+        self._bridged_tools.clear()
+
+    def get_bridged_tools(self) -> List[str]:
+        return list(self._bridged_tools.keys())

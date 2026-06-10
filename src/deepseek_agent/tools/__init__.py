@@ -15,6 +15,9 @@ from .knowledge import find_symbol, get_callers, get_imports, analyze_impact, in
 from .testing import generate_tests, run_test_suite, get_coverage
 from .security import security_scan
 from .mutation import MutateCode
+from .refactor import auto_refactor
+from .arch_check import arch_check
+from .benchmark import benchmark
 
 __all__ = [
     # Base
@@ -38,4 +41,10 @@ __all__ = [
     "security_scan",
     # Mutation
     "MutateCode",
+    # Refactoring
+    "auto_refactor",
+    # Architecture
+    "arch_check",
+    # Benchmark
+    "benchmark",
 ]

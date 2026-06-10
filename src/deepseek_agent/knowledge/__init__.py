@@ -3,10 +3,14 @@
 """
 from .parser import CodeParser, SymbolTable, Symbol
 from .graph import RelationGraph
+from .watcher import IncrementalWatcher, IncrementalUpdater, FileSnapshot
 
 __all__ = [
     "CodeParser",
     "SymbolTable",
     "Symbol",
     "RelationGraph",
+    "IncrementalWatcher",
+    "IncrementalUpdater",
+    "FileSnapshot",
 ]
