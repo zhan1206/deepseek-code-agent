@@ -541,6 +541,75 @@ async def websocket_agent(websocket: WebSocket, session_id: str):
         await websocket.send_json({"type": "error", "message": str(e)})
 
 
+@app.get("/a2a/card")
+async def a2a_card():
+    """返回 Agent 身份卡（A2A 发现端点）"""
+    try:
+        from ..a2a import get_a2a_server
+        return get_a2a_server().get_card()
+    except Exception as e:
+        return {"error": str(e)}
+
+
+@app.post("/a2a/request")
+async def a2a_request(request: Request):
+    """处理来自其他 Agent 的 A2A 请求"""
+    try:
+        data = await request.json()
+        from ..a2a import get_a2a_server
+        server = get_a2a_server()
+        return await server.handle_request(data)
+    except Exception as e:
+        return {"error": str(e)}
+
+
+# ── P2 端点：语音转写 & 截图分析 ────────────────────────────────────
+
+@app.post("/api/transcribe")
+async def transcribe_audio(request: Request):
+    """语音转写（需 Whisper API 或本地 whisper）"""
+    form = await request.form()
+    audio = form.get("audio")
+    if not audio:
+        return {"error": "No audio file provided"}
+    # 骨架：实际集成 Whisper API
+    return {
+        "text": "",
+        "note": "Whisper integration pending; requires OPENAI_API_KEY or local whisper.cpp",
+    }
+
+
+@app.post("/api/analyze-image")
+async def analyze_image(request: Request):
+    """截图/图片分析（需 DeepSeek VL 或类似视觉模型）"""
+    form = await request.form()
+    image = form.get("image")
+    prompt = (await request.form()).get("prompt", "Describe this image in detail. If it contains code, extract it.")
+    if not image:
+        return {"error": "No image file provided"}
+    # 骨架：实际集成 DeepSeek VL
+    return {
+        "description": "",
+        "note": "Vision model integration pending; requires DeepSeek VL or GPT-4V API key",
+    }
+
+
+@app.post("/feedback")
+async def submit_feedback(request: Request):
+    """提交错误反馈报告"""
+    try:
+        data = await request.json()
+        from ..core.feedback import get_feedback_collector
+        collector = get_feedback_collector()
+        report = collector.create_report(
+            user_description=data.get("description", ""),
+            context=data.get("context"),
+        )
+        return {"status": "saved", "report": report}
+    except Exception as e:
+        return {"error": str(e)}
+
+
 # ── 启动入口 ─────────────────────────────────────────────────────────────
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):
