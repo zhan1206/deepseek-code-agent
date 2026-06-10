@@ -50,6 +50,7 @@ def _get_graph(root: str) -> RelationGraph:
         "支持按名称模糊匹配、按类型和文件路径过滤。"
     ),
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 def find_symbol(
     name: str,
@@ -100,6 +101,7 @@ def find_symbol(
     name="get_callers",
     description="查找调用了指定符号的所有文件和函数。",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 def get_callers(symbol: str) -> ToolResult:
     """
@@ -124,6 +126,7 @@ def get_callers(symbol: str) -> ToolResult:
     name="get_imports",
     description="查看模块的导入关系（被导入的模块列表）。",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 def get_imports(module_path: str) -> ToolResult:
     """
@@ -150,6 +153,7 @@ def get_imports(module_path: str) -> ToolResult:
     name="analyze_impact",
     description="分析修改某符号会影响哪些其他代码（递归深度可配置）。",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 def analyze_impact(
     target_symbol: str,

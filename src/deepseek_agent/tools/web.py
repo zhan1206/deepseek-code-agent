@@ -216,6 +216,7 @@ async def web_fetch(
     name="read_docs",
     description="查询离线文档（devdocs.io 类），返回相关章节",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 async def read_docs(
     library: str,

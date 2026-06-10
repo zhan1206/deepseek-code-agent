@@ -70,6 +70,7 @@ class Tool:
     parameters: Dict[str, Any] = field(default_factory=dict)
     danger_level: DangerLevel = DangerLevel.SAFE
     require_approval: bool = False
+    read_only: bool = False  # 只读工具可安全并发执行
     examples: Optional[List[Dict]] = None
 
     def __post_init__(self):
@@ -232,6 +233,7 @@ def tool(
     description: str = "",
     danger_level: DangerLevel = DangerLevel.SAFE,
     require_approval: Optional[bool] = None,
+    read_only: bool = False,
     examples: Optional[List[Dict]] = None,
 ) -> Callable[[Callable], Tool]:
     """
@@ -253,6 +255,7 @@ def tool(
             func=func,
             danger_level=danger_level,
             require_approval=_approval,
+            read_only=read_only,
             examples=examples,
         )
     return decorator

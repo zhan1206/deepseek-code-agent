@@ -1,4 +1,4 @@
-"""LSP 工具集 — 5 个代码理解工具，基于正则的轻量实现（降级模式）。"""
+﻿"""LSP 工具集 — 5 个代码理解工具，基于正则的轻量实现（降级模式）。"""
 from __future__ import annotations
 import re
 from typing import Any, Dict, List, Optional, Tuple
@@ -37,7 +37,7 @@ def _find_references(content: str, symbol: str) -> List[str]:
 
 # ── 工具 ──────────────────────────────────────────────────────────────
 
-@tool(name="get_symbols", description="获取文件中定义的符号（函数、类、变量）。", danger_level=0)
+@tool(name="get_symbols", description="获取文件中定义的符号（函数、类、变量）。", danger_level=0, read_only=True)
 async def get_symbols(path: str) -> str:
     """返回文件中所有顶层符号定义。"""
     try:
@@ -50,7 +50,7 @@ async def get_symbols(path: str) -> str:
     except Exception as e:
         return ToolResult.fail(f"获取符号失败: {e}").to_str()
 
-@tool(name="find_references", description="查找符号的所有引用位置。", danger_level=0)
+@tool(name="find_references", description="查找符号的所有引用位置。", danger_level=0, read_only=True)
 async def find_references(symbol: str, path: str) -> str:
     """返回符号在文件中的所有引用。"""
     try:
@@ -62,7 +62,7 @@ async def find_references(symbol: str, path: str) -> str:
     except Exception as e:
         return ToolResult.fail(f"查找引用失败: {e}").to_str()
 
-@tool(name="go_to_definition", description="跳转到符号定义处。", danger_level=0)
+@tool(name="go_to_definition", description="跳转到符号定义处。", danger_level=0, read_only=True)
 async def go_to_definition(symbol: str, path: str) -> str:
     """返回符号定义的行号和内容。"""
     try:
@@ -75,7 +75,7 @@ async def go_to_definition(symbol: str, path: str) -> str:
     except Exception as e:
         return ToolResult.fail(f"跳转定义失败: {e}").to_str()
 
-@tool(name="get_hover_info", description="获取悬停信息（类型、文档字符串）。", danger_level=0)
+@tool(name="get_hover_info", description="获取悬停信息（类型、文档字符串）。", danger_level=0, read_only=True)
 async def get_hover_info(path: str, line: int, col: int = 0) -> str:
     """返回指定行附近的类型信息和文档。"""
     try:
@@ -100,7 +100,7 @@ async def get_hover_info(path: str, line: int, col: int = 0) -> str:
     except Exception as e:
         return ToolResult.fail(f"获取悬停信息失败: {e}").to_str()
 
-@tool(name="get_diagnostics", description="获取当前文件的 lint 错误和警告。", danger_level=0)
+@tool(name="get_diagnostics", description="获取当前文件的 lint 错误和警告。", danger_level=0, read_only=True)
 async def get_diagnostics(path: str) -> str:
     """运行 ruff/flake8/pylint 获取诊断信息（降级为语法检查）。"""
     import subprocess, tempfile

@@ -6,7 +6,7 @@ with open("README.md", "w", encoding="utf-8") as f:
 
 setup(
     name="deepseek-code-agent",
-    version="0.2.0",
+    version="2.0.0",
     description="基于 DeepSeek 模型的代码智能助手框架",
     long_description=open("README.md", encoding="utf-8").read(),
     long_description_content_type="text/markdown",
@@ -35,6 +35,9 @@ setup(
             "networkx>=3.0",
             "scikit-learn>=1.0",
         ],
+        "security": [
+            "bandit>=1.7",
+        ],
         "sandbox": [
             "docker>=7.0",
         ],
@@ -49,8 +52,11 @@ setup(
             "uvicorn>=0.29.0",
             "pydantic>=2.0",
             "networkx>=3.0",
+            "bandit>=1.7",
+            "watchdog>=3.0",
             "pytest>=8.0",
             "pytest-asyncio>=0.23.0",
+            "pytest-benchmark>=4.0",
         ],
     },
     entry_points={

@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 from .base import tool, DangerLevel, ToolResult
+from .security import SecurityScanner
 
 
 # ── 路径安全检查 ─────────────────────────────────────────────────────────
@@ -44,6 +45,7 @@ def _ensure_path(path: str) -> Path:
     name="read_file",
     description="读取文件全部或部分内容，支持行号和范围。",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 async def read_file(path: str, offset: int = 0, limit: int = 100) -> str:
     """
@@ -95,11 +97,27 @@ async def write_file(path: str, content: str) -> str:
     """
     写入文件，原子性操作（写临时文件 → 重命名）。
 
+    v2.0: 写入前自动执行安全扫描，HIGH 级别漏洞阻止写入。
+
     Args:
         path: 文件路径
         content: 文件内容
     """
     try:
+        # ── 安全扫描钩子 ──────────────────────────────────────────
+        scanner = SecurityScanner(min_severity="MEDIUM")
+        is_safe, findings = scanner.scan_content_before_write(content, path, block_on_high=True)
+        if not is_safe:
+            high_findings = [f for f in findings if f.severity == "HIGH"]
+            issues = "\n".join(
+                f"  🔴 [{f.rule_id}] {f.message} (行 {f.line_number})"
+                for f in high_findings
+            )
+            return ToolResult.fail(
+                f"写入被安全扫描阻止：发现 {len(high_findings)} 个高危漏洞\n{issues}\n"
+                f"如需强制写入，请使用 write_file_unsafe 或调整安全策略。"
+            ).to_str()
+
         p = _ensure_path(path)
         # 原子写入
         fd, tmp = tempfile.mkstemp(dir=p.parent, suffix=".tmp")
@@ -231,6 +249,7 @@ async def edit_file(
     name="list_directory",
     description="列出目录内容，支持递归深度控制。",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 async def list_directory(path: str = ".", depth: int = 2) -> str:
     """
@@ -278,6 +297,7 @@ async def list_directory(path: str = ".", depth: int = 2) -> str:
     name="search_file",
     description="按文件名搜索（支持通配符）。",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 async def search_file(
     pattern: str,
@@ -314,6 +334,7 @@ async def search_file(
     name="search_content",
     description="在文件内容中搜索文本或正则表达式，显示行号。",
     danger_level=DangerLevel.SAFE,
+    read_only=True,
 )
 async def search_content(
     pattern: str,

@@ -1,4 +1,4 @@
-"""
+﻿"""
 测试工具集 — TDD 循环支持：生成测试、执行测试套件、获取覆盖率。
 """
 
@@ -79,7 +79,7 @@ def _parse_pytest_output(output: str) -> Dict[str, Any]:
 
 @tool(
     name="generate_tests",
-    description="为目标函数/模块生成 pytest 测试用例（自动调用 LLM，最多重试 3 次）。",
+    description="为目标函数/模块生成 pytest 测试用例（自适应反馈循环，失败后自动补充边界用例）。",
     danger_level=DangerLevel.MODERATE,
 )
 def generate_tests(
@@ -87,6 +87,7 @@ def generate_tests(
     output_path: Optional[str] = None,
     framework: str = "pytest",
     style: str = "descriptive",
+    max_feedback_rounds: int = 3,
 ) -> ToolResult:
     """
     生成测试用例。
@@ -174,11 +175,91 @@ def generate_tests(
         except Exception:
             break
 
-    return ToolResult.success({
+    return ToolResult.ok({
         "target": target,
         "output_path": str(test_file),
         "attempt": attempt + 1,
         "generated_lines": len(test_code.splitlines()),
+    })
+
+
+    # ── v2.0 自适应反馈循环 ──────────────────────────────────────────
+    # 运行测试 → 收集失败结果 → 反馈 LLM 补充用例 → 重复
+    coverage_improved = True
+    last_coverage = 0.0
+
+    for round_num in range(max_feedback_rounds):
+        if not coverage_improved and round_num > 0:
+            break  # 覆盖率未提升则停止
+
+        # 运行测试
+        import subprocess as _sp
+        test_result = _sp.run(
+            [PY, "-m", "pytest", str(test_file), "-v", "--tb=short", "-q"],
+            capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+        )
+        test_output = test_result.stdout + "\n" + test_result.stderr
+
+        # 检查是否全部通过
+        if test_result.returncode == 0:
+            break  # 全部通过，无需反馈
+
+        # 收集失败信息
+        failed_tests = []
+        for line in test_output.splitlines():
+            if "FAILED" in line:
+                failed_tests.append(line.strip())
+
+        # 运行覆盖率
+        coverage_result = _sp.run(
+            [PY, "-m", "coverage", "run", "-m", "pytest", str(test_file), "-q", "--tb=no"],
+            capture_output=True, text=True, timeout=60, encoding="utf-8", errors="replace",
+        )
+        coverage_report = _sp.run(
+            [PY, "-m", "coverage", "report", "--show-missing"],
+            capture_output=True, text=True, timeout=30, encoding="utf-8", errors="replace",
+        )
+
+        # 提取覆盖率百分比
+        cov_match = re.search(r'(\d+)%', coverage_report.stdout)
+        current_coverage = float(cov_match.group(1)) if cov_match else 0.0
+        coverage_improved = current_coverage > last_coverage
+        last_coverage = current_coverage
+
+        # 反馈 LLM 补充边界用例
+        feedback_prompt = f"""测试运行结果：
+- 通过/失败：见下方输出
+- 覆盖率：{current_coverage}%
+- 失败的测试：{chr(10).join(failed_tests[:10])}
+
+测试输出摘要：
+{test_output[-1500:]}
+
+覆盖率报告（缺失行）：
+{coverage_report.stdout[-1000:]}
+
+请基于以上反馈补充边界用例，只输出需要新增的测试函数（不要重复已有测试）："""
+
+        try:
+            resp = asyncio.run(client.chat(
+                [{"role": "user", "content": feedback_prompt}],
+                max_tokens=2048, temperature=0.2,
+            ))
+            new_tests = resp.content or ""
+            # 追加到测试文件
+            if new_tests.strip():
+                existing = test_file.read_text(encoding="utf-8")
+                test_file.write_text(existing + "\n\n" + new_tests, encoding="utf-8")
+        except Exception:
+            break  # LLM 调用失败则停止反馈循环
+
+    return ToolResult.ok({
+        "target": target,
+        "output_path": str(test_file),
+        "attempts": attempt + 1,
+        "feedback_rounds": round_num + 1 if max_feedback_rounds > 0 else 0,
+        "final_coverage": last_coverage,
+        "generated_lines": len(test_file.read_text(encoding="utf-8").splitlines()),
     })
 
 
@@ -239,7 +320,7 @@ def run_test_suite(
     parsed["exit_code"] = result.returncode
     parsed["output_preview"] = output[-2000:]  # 末尾 2000 字符
 
-    return ToolResult.success(parsed)
+    return ToolResult.ok(parsed)
 
 
 @tool(
@@ -280,7 +361,7 @@ def get_coverage(
         )
         try:
             data = json.loads(Path(json_file).read_text(errors="replace"))
-            return ToolResult.success({"format": "json", "data": data})
+            return ToolResult.ok({"format": "json", "data": data})
         except Exception:
             pass
     elif report_format == "html":
@@ -289,15 +370,15 @@ def get_coverage(
             [str(PY), "-m", "coverage", "html", "-d", out_dir, "--quiet"],
             capture_output=True, timeout=30,
         )
-        return ToolResult.success({"format": "html", "output_dir": out_dir})
+        return ToolResult.ok({"format": "html", "output_dir": out_dir})
     else:
         r = subprocess.run(
             [str(PY), "-m", "coverage", "report", "--show-missing"],
             capture_output=True, text=True, timeout=30,
         )
-        return ToolResult.success({
+        return ToolResult.ok({
             "format": "term",
             "output": r.stdout + r.stderr,
         })
 
-    return ToolResult.success({"format": report_format, "note": "报告生成失败"})
+    return ToolResult.ok({"format": report_format, "note": "报告生成失败"})

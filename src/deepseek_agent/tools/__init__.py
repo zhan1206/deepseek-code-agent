@@ -13,6 +13,8 @@ from .web import web_fetch, read_docs
 from .lsp import get_symbols, find_references, go_to_definition, get_hover_info, get_diagnostics
 from .knowledge import find_symbol, get_callers, get_imports, analyze_impact, ingest_project
 from .testing import generate_tests, run_test_suite, get_coverage
+from .security import security_scan
+from .mutation import MutateCode
 
 __all__ = [
     # Base
@@ -32,4 +34,8 @@ __all__ = [
     "find_symbol", "get_callers", "get_imports", "analyze_impact", "ingest_project",
     # Testing
     "generate_tests", "run_test_suite", "get_coverage",
+    # Security
+    "security_scan",
+    # Mutation
+    "MutateCode",
 ]

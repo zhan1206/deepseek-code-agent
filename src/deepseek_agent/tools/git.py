@@ -35,7 +35,7 @@ def _run_git(args: List[str], cwd: str = ".") -> ToolResult:
         return ToolResult.fail(f"Git 执行错误：{str(e)}")
 
 
-@tool(name="git_diff", description="查看工作区或暂存区的文件变更差异。", danger_level=DangerLevel.SAFE)
+@tool(name="git_diff", description="查看工作区或暂存区的文件变更差异。", danger_level=DangerLevel.SAFE, read_only=True)
 async def git_diff(
     path: str = ".",
     staged: bool = False,
@@ -65,7 +65,7 @@ async def git_diff(
     return _run_git(args).to_str()
 
 
-@tool(name="git_log", description="查看 Git 提交历史。", danger_level=DangerLevel.SAFE)
+@tool(name="git_log", description="查看 Git 提交历史。", danger_level=DangerLevel.SAFE, read_only=True)
 async def git_log(
     count: int = 10,
     path: str = "",
@@ -115,7 +115,7 @@ async def git_log(
     ).to_str()
 
 
-@tool(name="git_status", description="查看仓库当前状态（修改/暂存/未跟踪文件）。", danger_level=DangerLevel.SAFE)
+@tool(name="git_status", description="查看仓库当前状态（修改/暂存/未跟踪文件）。", danger_level=DangerLevel.SAFE, read_only=True)
 async def git_status(path: str = ".") -> str:
     """显示工作区状态。"""
     args = ["status", "--porcelain=v1", "-b"]

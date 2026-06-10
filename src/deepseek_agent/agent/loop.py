@@ -15,6 +15,7 @@ from typing import Any, Callable, Dict, List, Optional, Generator, AsyncGenerato
 from ..core.client import DeepSeekClient, Response, ToolCall
 from ..tools.base import ToolRegistry, ToolResult, DangerLevel
 from ..memory.manager import MemoryManager, ShortTermMemory
+from .context_budget import ContextBudget, BudgetConfig, ContextPriority, ContextEntry
 
 
 # ── 枚举 ─────────────────────────────────────────────────────────────────
@@ -189,6 +190,9 @@ class LoopConfig:
     # ── 双模型分离 ─────────────────────────────────────────────
     planner_model: str = "deepseek-reasoner"  # 规划/推理专用模型
     executor_model: str = "deepseek-chat"      # 执行/对话专用模型
+    # ── 上下文预算 ──────────────────────────────────────────────
+    budget_max_tokens: int = 30000              # 上下文预算上限
+    budget_summary_trigger: float = 0.80       # 使用率触发总结
 
 
 class PermissionCallback:
@@ -273,6 +277,13 @@ class AgentLoop:
         self.permission = permission_callback or PermissionCallback()
         self.task_tracker = TaskTracker()
 
+        # 上下文预算
+        budget_config = BudgetConfig(
+            max_tokens=self.config.budget_max_tokens,
+            summary_trigger=self.config.budget_summary_trigger,
+        )
+        self.context_budget = ContextBudget(budget_config)
+
         # 运行时状态
         self._step_count = 0
         self._total_tool_calls = 0
@@ -319,6 +330,19 @@ class AgentLoop:
 
             # 构建消息
             messages = self._build_messages(base_system)
+
+            # ── 上下文预算检查 ──────────────────────────────────────────
+            budget = ContextBudget.from_messages(
+                messages,
+                BudgetConfig(
+                    max_tokens=self.config.budget_max_tokens,
+                    summary_trigger=self.config.budget_summary_trigger,
+                ),
+            )
+            was_trimmed, removed = budget.check_budget()
+            if was_trimmed:
+                messages = budget.to_messages()
+
             tools = self.registry.get_schemas()
 
             try:
@@ -451,24 +475,70 @@ class AgentLoop:
     ) -> Dict[str, ToolResult]:
         """
         执行工具调用列表，支持并行 + 审批。
+
+        v2.0: 只读工具并发执行，写工具串行执行。
         """
+        if not tool_calls:
+            return {}
+
         results: Dict[str, ToolResult] = {}
+
+        # ── 分组：只读 vs 写 ──────────────────────────────────────────
+        readonly_calls: List[tuple[ToolCall, Any]] = []  # (tc, tool_obj)
+        write_calls: List[ToolCall] = []
 
         for tc in tool_calls:
             self._total_tool_calls += 1
-            tool = self.registry.get(tc.name)
+            tool_obj = self.registry.get(tc.name)
+            if tool_obj is None:
+                results[tc.id] = ToolResult.fail(f"未知工具: {tc.name}")
+                continue
+            if tool_obj.read_only:
+                readonly_calls.append((tc, tool_obj))
+            else:
+                write_calls.append(tc)
 
-            if tool is None:
+        # ── 并发执行只读工具 ──────────────────────────────────────────
+        if readonly_calls:
+            async def _run_readonly(tc: ToolCall, tool_obj: Any) -> tuple[str, ToolResult]:
+                needs = await self.permission.requires_approval(
+                    tc.name, tc.arguments, tool_obj.danger_level
+                )
+                if needs:
+                    approved, modified = await self.permission.request_approval(
+                        tc.name, tc.arguments, tool_obj.danger_level
+                    )
+                    if not approved:
+                        return tc.id, ToolResult.fail("用户拒绝执行")
+                    if modified:
+                        tc = ToolCall(id=tc.id, name=tc.name, arguments=modified)
+                result = await self.registry.execute(tc.name, **tc.arguments)
+                return tc.id, result
+
+            readonly_results = await asyncio.gather(
+                *[_run_readonly(tc, tobj) for tc, tobj in readonly_calls],
+                return_exceptions=True,
+            )
+            for item in readonly_results:
+                if isinstance(item, Exception):
+                    results["unknown"] = ToolResult.fail(str(item))
+                else:
+                    tc_id, result = item
+                    results[tc_id] = result
+
+        # ── 串行执行写工具（带审批）──────────────────────────────────────
+        for tc in write_calls:
+            tool_obj = self.registry.get(tc.name)
+            if tool_obj is None:
                 results[tc.id] = ToolResult.fail(f"未知工具: {tc.name}")
                 continue
 
-            # 审批检查
             needs_approval = await self.permission.requires_approval(
-                tc.name, tc.arguments, tool.danger_level
+                tc.name, tc.arguments, tool_obj.danger_level
             )
             if needs_approval:
                 approved, modified = await self.permission.request_approval(
-                    tc.name, tc.arguments, tool.danger_level
+                    tc.name, tc.arguments, tool_obj.danger_level
                 )
                 if not approved:
                     results[tc.id] = ToolResult.fail("用户拒绝执行")
