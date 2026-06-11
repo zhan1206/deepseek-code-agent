@@ -234,6 +234,10 @@ def create_session(session_id: str, project: str, model: str, mode: str) -> Sess
     registry.register(web_fetch)
     registry.register(read_docs)
 
+    # Template tools (v2.0 §5.4)
+    from ..templates.tools import register_template_tools
+    register_template_tools(registry)
+
     memory = MemoryManager(
         project_path=project,
         long_term_dir=os.path.expanduser("~/.deepseek_agent_memory"),
