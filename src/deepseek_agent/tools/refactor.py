@@ -20,15 +20,21 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .base import tool, DangerLevel, ToolResult
 
+try:
+    from ..knowledge import RelationGraph
+    _HAS_RELATION_GRAPH = True
+except ImportError:
+    _HAS_RELATION_GRAPH = False
+
 
 # ── 重构引擎 ─────────────────────────────────────────────────────────────
 
 class RefactorEngine:
-    """基于知识图谱的语义重构引擎。"""
+    """基于 AST + 关系图谱的语义重构引擎。"""
 
     def __init__(self, project_path: str = "."):
         self.project_path = Path(project_path).resolve()
-        self.graph = KnowledgeGraph()
+        self._rg = RelationGraph() if _HAS_RELATION_GRAPH else None
 
     # ── 重命名 ──────────────────────────────────────────────────────
 
@@ -198,20 +204,57 @@ class RefactorEngine:
     # ── 辅助方法 ────────────────────────────────────────────────────
 
     def _find_definitions(self, name: str, file_path: Optional[str] = None) -> List[Dict]:
-        """在知识图谱中查找符号定义。"""
+        """在 AST 中查找符号定义，优先使用 RelationGraph。"""
         results = []
-        try:
-            # 使用 KnowledgeGraph 查找
-            for node_id, data in self.graph.graph.nodes(data=True):
-                if data.get("name") == name:
+
+        # 尝试使用 RelationGraph 的 build_from_dir + stats
+        if self._rg is not None:
+            try:
+                self._rg.build_from_dir(str(self.project_path))
+                # 使用 find_callers/find_dependents 查找关联符号
+                callers = self._rg.find_callers(name)
+                for c in callers[:20]:
                     results.append({
-                        "file_path": data.get("file", ""),
-                        "line_number": data.get("line", 0),
+                        "file_path": c if isinstance(c, str) else str(c),
+                        "line_number": 0,
                         "type": "definition",
-                        "kind": data.get("kind", ""),
+                        "kind": "symbol",
                     })
-        except Exception:
-            pass
+            except Exception:
+                pass
+
+        # Fallback: AST 搜索
+        if not results:
+            results = self._ast_search_definitions(name, file_path)
+
+        return results
+
+    def _ast_search_definitions(self, name: str, file_path: Optional[str] = None) -> List[Dict]:
+        """AST 搜索符号定义。"""
+        results = []
+        search_dirs = [Path(file_path).parent] if file_path else [self.project_path]
+
+        for search_dir in search_dirs:
+            for py_file in search_dir.rglob("*.py"):
+                try:
+                    tree = ast.parse(py_file.read_text(encoding="utf-8", errors="replace"))
+                    for node in ast.walk(tree):
+                        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name == name:
+                            results.append({
+                                "file_path": str(py_file),
+                                "line_number": node.lineno,
+                                "type": "definition",
+                                "kind": "function",
+                            })
+                        elif isinstance(node, ast.ClassDef) and node.name == name:
+                            results.append({
+                                "file_path": str(py_file),
+                                "line_number": node.lineno,
+                                "type": "definition",
+                                "kind": "class",
+                            })
+                except Exception:
+                    continue
         return results
 
     def _text_search_definitions(self, name: str) -> List[Dict]:

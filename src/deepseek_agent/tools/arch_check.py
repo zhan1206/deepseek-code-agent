@@ -264,7 +264,7 @@ async def arch_check(
     """
     sniffer = ArchSniffer(project_path)
 
-    if checks == "all":
+    if checks == "all" or checks == ["all"]:
         findings = sniffer.scan_all()
     else:
         sniffer.findings = []
@@ -275,7 +275,9 @@ async def arch_check(
             "deep_nesting": sniffer._check_deep_nesting,
             "high_coupling": sniffer._check_high_coupling,
         }
-        for check_name in checks.split(","):
+        # 支持 str 或 list 传入
+        check_list = checks.split(",") if isinstance(checks, str) else list(checks)
+        for check_name in check_list:
             check_name = check_name.strip()
             if check_name in check_map:
                 check_map[check_name]()

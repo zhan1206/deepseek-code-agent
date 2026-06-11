@@ -148,8 +148,8 @@ async def debug_start(target: str, breakpoints: Optional[str] = None) -> ToolRes
     bp_list = json.loads(breakpoints) if breakpoints else None
     result = await mgr.start(target, bp_list)
     if "error" in result:
-        return ToolResult(ok=False, output=result["error"])
-    return ToolResult(ok=True, output=json.dumps(result, indent=2))
+        return ToolResult(success=False, error=result["error"])
+    return ToolResult(success=True, data=json.dumps(result, indent=2))
 
 
 @tool(
@@ -161,7 +161,7 @@ async def debug_start(target: str, breakpoints: Optional[str] = None) -> ToolRes
 async def debug_continue() -> ToolResult:
     mgr = _get_debug_manager()
     result = await mgr.continue_execution()
-    return ToolResult(ok=True, output=json.dumps(result, indent=2))
+    return ToolResult(success=True, data=json.dumps(result, indent=2))
 
 
 @tool(
@@ -173,7 +173,7 @@ async def debug_continue() -> ToolResult:
 async def debug_step_over() -> ToolResult:
     mgr = _get_debug_manager()
     result = await mgr.step_over()
-    return ToolResult(ok=True, output=json.dumps(result, indent=2))
+    return ToolResult(success=True, data=json.dumps(result, indent=2))
 
 
 @tool(
@@ -185,7 +185,7 @@ async def debug_step_over() -> ToolResult:
 async def debug_step_into() -> ToolResult:
     mgr = _get_debug_manager()
     result = await mgr.step_into()
-    return ToolResult(ok=True, output=json.dumps(result, indent=2))
+    return ToolResult(success=True, data=json.dumps(result, indent=2))
 
 
 @tool(
@@ -197,7 +197,7 @@ async def debug_step_into() -> ToolResult:
 async def debug_get_variables(scope: str = "local") -> ToolResult:
     mgr = _get_debug_manager()
     result = await mgr.get_variables(scope)
-    return ToolResult(ok=True, output=json.dumps(result, indent=2))
+    return ToolResult(success=True, data=json.dumps(result, indent=2))
 
 
 @tool(
@@ -208,7 +208,7 @@ async def debug_get_variables(scope: str = "local") -> ToolResult:
 async def debug_evaluate(expression: str, frame_id: int = 0) -> ToolResult:
     mgr = _get_debug_manager()
     result = await mgr.evaluate(expression, frame_id)
-    return ToolResult(ok=True, output=json.dumps(result, indent=2))
+    return ToolResult(success=True, data=json.dumps(result, indent=2))
 
 
 @tool(
@@ -219,4 +219,4 @@ async def debug_evaluate(expression: str, frame_id: int = 0) -> ToolResult:
 async def debug_stop() -> ToolResult:
     mgr = _get_debug_manager()
     result = await mgr.stop()
-    return ToolResult(ok=True, output=json.dumps(result, indent=2))
+    return ToolResult(success=True, data=json.dumps(result, indent=2))
