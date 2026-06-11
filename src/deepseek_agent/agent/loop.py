@@ -10,7 +10,7 @@ import uuid
 import json
 from dataclasses import dataclass, field
 from enum import Enum
-from typing import Any, Callable, Dict, List, Optional, Generator, AsyncGenerator
+from typing import Any, Callable, Dict, List, Optional, Generator, AsyncGenerator, Set
 
 from ..core.client import DeepSeekClient, Response, ToolCall
 from ..tools.base import ToolRegistry, ToolResult, DangerLevel
@@ -193,6 +193,10 @@ class LoopConfig:
     # ── 上下文预算 ──────────────────────────────────────────────
     budget_max_tokens: int = 30000              # 上下文预算上限
     budget_summary_trigger: float = 0.80       # 使用率触发总结
+    # ── 动态工具裁剪 ──────────────────────────────────────────
+    tool_pruning_threshold: float = 0.80     # 上下文超过此比例时裁剪工具集
+    planning_tools: Optional[List[str]] = None  # 规划阶段工具（默认只读工具）
+    verbose_tools: Optional[List[str]] = None   # 大输出工具（超限时移除）
 
 
 class PermissionCallback:
@@ -470,6 +474,31 @@ class AgentLoop:
             # 降级：单步计划
             self.task_tracker.init_plan([resp.content or "执行任务"])
 
+    def _select_tools(self, messages: List[Dict[str, str]]) -> List[Dict[str, Any]]:
+        """动态工具集裁剪：根据上下文预算选择工具。"""
+        all_schemas = self.registry.get_schemas()
+
+        # 计算当前上下文 token 估算
+        total = sum(self.context_budget._total_tokens, self.context_budget.total_tokens) \
+            if hasattr(self.context_budget, '_total_tokens') else 0
+        ratio = total / self.config.budget_max_tokens if self.config.budget_max_tokens > 0 else 0
+
+        if ratio <= self.config.tool_pruning_threshold:
+            return all_schemas  # 预算充足，返回全部工具
+
+        # 超限时移除大输出工具
+        verbose = set(self.config.verbose_tools or ['read_file', 'search_content', 'read_docs'])
+        pruned = [s for s in all_schemas if s['function']['name'] not in verbose]
+
+        if ratio <= 1.0:
+            return pruned
+
+        # 严重超限时只保留核心工具
+        core = set(self.config.planning_tools or [
+            'list_directory', 'search_file', 'find_symbol', 'git_status'
+        ])
+        return [s for s in all_schemas if s['function']['name'] in core]
+
     async def _execute_tool_calls(
         self, tool_calls: List[ToolCall]
     ) -> Dict[str, ToolResult]:
@@ -571,7 +600,11 @@ class AgentLoop:
             )},
             *self.memory.get_messages(),
         ]
-        resp = await self.client.chat(messages, max_tokens=2048)
+        resp = await self.client.chat(
+            messages,
+            max_tokens=2048,
+            model=self.client.active_model,
+        )
         return resp
 
     async def _reflect(self) -> bool:

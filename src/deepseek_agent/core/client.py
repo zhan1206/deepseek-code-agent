@@ -228,6 +228,28 @@ class DeepSeekClient:
             payload.update(kwargs)
         return payload
 
+    # ── 模型降级状态 ─────────────────────────────────────────────
+    _consecutive_errors: int = 0
+    _fallback_model: Optional[str] = None
+    FALLBACK_THRESHOLD: int = 3  # 连续错误达到此值触发降级
+
+    @property
+    def active_model(self) -> str:
+        return self._fallback_model or self.model
+
+    def reset_errors(self) -> None:
+        """重置错误计数（成功调用后调用）。"""
+        self._consecutive_errors = 0
+
+    def trigger_fallback(self) -> Optional[str]:
+        """触发模型降级，返回降级后的模型名。"""
+        if self._fallback_model is None and self.model == "deepseek-chat":
+            self._fallback_model = "deepseek-reasoner"
+            return self._fallback_model
+        return self._fallback_model
+
+    # ── 内部方法 ────────────────────────────────────────────────────────
+
     async def _request(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         last_error: Optional[Exception] = None
 
@@ -238,6 +260,7 @@ class DeepSeekClient:
 
                 if resp.status_code == 200:
                     self._track_usage(body.get("usage", {}))
+                    self.reset_errors()
                     return body
 
                 error = DeepSeekAPIError.from_response(resp.status_code, body)
@@ -247,16 +270,33 @@ class DeepSeekClient:
                     raise ContextLengthExceededError(str(error)) from None
 
                 if not error.is_retriable or attempt == self.max_retries - 1:
+                    self._consecutive_errors += 1
+                    if self._consecutive_errors >= self.FALLBACK_THRESHOLD:
+                        self.trigger_fallback()
                     raise error
 
-                # 指数退避
-                await asyncio.sleep(2 ** attempt * 0.5)
+                # 优先使用 Retry-After 头
+                retry_after = resp.headers.get("Retry-After")
+                if retry_after:
+                    try:
+                        wait = float(retry_after)
+                    except ValueError:
+                        wait = 2 ** attempt * 0.5
+                else:
+                    wait = 2 ** attempt * 0.5
+
+                await asyncio.sleep(wait)
                 last_error = error
 
             except httpx.TimeoutException as e:
+                self._consecutive_errors += 1
                 last_error = e
                 if attempt < self.max_retries - 1:
                     await asyncio.sleep(2 ** attempt)
+
+        # 最终检查是否需要降级
+        if self._consecutive_errors >= self.FALLBACK_THRESHOLD:
+            self.trigger_fallback()
 
         raise last_error or DeepSeekAPIError(500, "Max retries exceeded")
 
@@ -307,12 +347,15 @@ class DeepSeekClient:
                 body = await resp.json()
                 raise DeepSeekAPIError.from_response(resp.status_code, body)
 
-            current_tc: Optional[ToolCallDelta] = None
+            # multi tool_call: dict by index (supports parallel tool_calls)
+            tc_list: Dict[int, ToolCallDelta] = {}  # index -> delta
             thinking_buf: List[str] = []
             content_buf: List[str] = []
             in_thinking = False
             is_reasoner = active_model == "deepseek-reasoner"
             first_chunk_sent = False
+            finish_reason: Optional[str] = None
+            last_usage: Optional[Dict] = None
 
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):

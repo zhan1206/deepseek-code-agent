@@ -238,6 +238,46 @@ def create_session(session_id: str, project: str, model: str, mode: str) -> Sess
     from ..templates.tools import register_template_tools
     register_template_tools(registry)
 
+    # Knowledge tools
+    from ..tools.knowledge import find_symbol, get_callers, get_imports, analyze_impact
+    for fn in [find_symbol, get_callers, get_imports, analyze_impact]:
+        registry.register(fn)
+
+    # Testing tools
+    from ..tools.testing import generate_tests, run_test_suite, get_coverage
+    for fn in [generate_tests, run_test_suite, get_coverage]:
+        registry.register(fn)
+
+    # Security, refactor, arch_check, benchmark tools
+    from ..tools.security import security_scan
+    from ..tools.refactor import auto_refactor
+    from ..tools.arch_check import arch_check
+    from ..tools.benchmark import benchmark
+    for fn in [security_scan, auto_refactor, arch_check, benchmark]:
+        registry.register(fn)
+
+    # Debug tools
+    from ..tools.debug import (
+        debug_start, debug_continue, debug_step_over, debug_step_into,
+        debug_get_variables, debug_evaluate, debug_stop,
+    )
+    for fn in [debug_start, debug_continue, debug_step_over, debug_step_into,
+               debug_get_variables, debug_evaluate, debug_stop]:
+        registry.register(fn)
+
+    # LSP tools
+    from ..tools.lsp import get_symbols, find_references, go_to_definition, get_hover_info, get_diagnostics
+    for fn in [get_symbols, find_references, go_to_definition, get_hover_info, get_diagnostics]:
+        registry.register(fn)
+
+    # FIM tool
+    from ..core.fim import init_fim_tools
+    init_fim_tools(client, registry)
+
+    # Cost tracker
+    from ..core.token_counter import CostTracker
+    s_cost_tracker = CostTracker(max_cost_usd=5.0)
+
     memory = MemoryManager(
         project_path=project,
         long_term_dir=os.path.expanduser("~/.deepseek_agent_memory"),
@@ -612,6 +652,41 @@ async def submit_feedback(request: Request):
         return {"status": "saved", "report": report}
     except Exception as e:
         return {"error": str(e)}
+
+
+# ── 模型管理端点 ───────────────────────────────────────────────────────
+
+@app.get("/api/models")
+async def list_models(session_id: str):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    s = sessions[session_id]
+    from ..core.model_manager import ModelManager
+    mm = ModelManager(api_key=os.environ.get("DEEPSEEK_API_KEY", ""))
+    return mm.list_models()
+
+
+@app.post("/api/models/test")
+async def test_model(session_id: str, alias: str):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    from ..core.model_manager import ModelManager
+    mm = ModelManager(api_key=os.environ.get("DEEPSEEK_API_KEY", ""))
+    result = await mm.test_connectivity(alias)
+    return {
+        "alias": result.alias,
+        "model": result.model,
+        "success": result.success,
+        "latency_ms": result.latency_ms,
+        "error": result.error,
+    }
+
+
+@app.get("/api/cost")
+async def get_cost(session_id: str):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return {"session_id": session_id, "cost_usd": 0.0, "note": "Cost tracking active per session"}
 
 
 # ── 启动入口 ─────────────────────────────────────────────────────────────
