@@ -1,4 +1,4 @@
-"""
+﻿"""
 Agent 主循环 — ReAct + Plan-Execute 双模式、多维终止条件、任务追踪器。
 """
 
@@ -190,6 +190,7 @@ class LoopConfig:
     # ── 双模型分离 ─────────────────────────────────────────────
     planner_model: str = "deepseek-reasoner"  # 规划/推理专用模型
     executor_model: str = "deepseek-chat"      # 执行/对话专用模型
+    max_planner_calls: int = 3                # 每会话 Planner 模型调用上限
     # ── 上下文预算 ──────────────────────────────────────────────
     budget_max_tokens: int = 30000              # 上下文预算上限
     budget_summary_trigger: float = 0.80       # 使用率触发总结
@@ -295,6 +296,7 @@ class AgentLoop:
         self._last_tool_result: Optional[str] = None
         self._start_time: Optional[float] = None
         self._reflection_count = 0
+        self._planner_calls = 0
 
     # ── 公开 API ──────────────────────────────────────────────────────────
 
@@ -322,8 +324,13 @@ class AgentLoop:
 
         # Plan-Execute 模式：先生成计划
         if self.config.mode == LoopMode.PLAN_EXECUTE:
-            await self._generate_plan()
-            yield Response(content=f"📋 **计划已生成**\n{self.task_tracker.get_plan_summary()}")
+            if self._planner_calls >= self.config.max_planner_calls:
+                yield Response(content=f"⚠️ Planner 调用已达上限（{self.config.max_planner_calls}），切换为 ReAct 模式")
+                self.config.mode = LoopMode.REACT
+            else:
+                await self._generate_plan()
+                self._planner_calls += 1
+                yield Response(content=f"📋 **计划已生成**\n{self.task_tracker.get_plan_summary()}")
 
         # 主循环
         while not self._should_terminate():
@@ -404,6 +411,7 @@ class AgentLoop:
         self._last_tool_result = None
         self._start_time = time.time()
         self._reflection_count = 0
+        self._planner_calls = 0
 
     def _should_terminate(self) -> bool:
         if self._step_count >= self.config.max_steps:
@@ -430,7 +438,7 @@ class AgentLoop:
             f"- **{t.name}**: {t.description}"
             for t in self.registry._tools.values()
         )
-        return (
+        base = (
             "你是一个严谨的代码助手。\n"
             f"可用工具：\n{tools_list}\n\n"
             "规则：\n"
@@ -439,6 +447,17 @@ class AgentLoop:
             "3. 执行危险操作前告知用户潜在风险\n"
             "4. 如果执行失败，给出清晰的错误信息和修复建议\n"
         )
+        # ── 自动注入项目骨架（如果可用）─────────────────────────────
+        try:
+            from ..knowledge.ingest import ProjectIngester
+            project_root = getattr(self.memory, 'project_root', None)
+            if project_root:
+                ingester = ProjectIngester(project_root)
+                snapshot = ingester.ingest(compression_rate=0.3, max_files=30)
+                snapshot_text = snapshot[:8000]; base += f"\n\n## 项目上下文\n{snapshot_text}"
+        except Exception:
+            pass  # 无项目上下文时不注入
+        return base
 
     def _build_messages(self, base_system: str) -> List[Dict[str, str]]:
         msgs = [{"role": "system", "content": base_system}]

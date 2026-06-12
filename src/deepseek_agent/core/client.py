@@ -356,6 +356,7 @@ class DeepSeekClient:
             first_chunk_sent = False
             finish_reason: Optional[str] = None
             last_usage: Optional[Dict] = None
+            current_tc: Optional[ToolCallDelta] = None  # 初始化，修复分支外使用 bug
 
             async for line in resp.aiter_lines():
                 if not line.startswith("data: "):
@@ -394,27 +395,27 @@ class DeepSeekClient:
 
                     if tc_delta.get("index") is not None:
                         idx = tc_delta["index"]
-                        # 简单策略：按顺序维护当前 tool_call 列表
-                        # （SSE 不保证 delta 顺序，严格实现需 buffer）
-                        if current_tc is None or idx != getattr(current_tc, "_index", -1):
-                            current_tc = ToolCallDelta()
-                            current_tc._index = idx
+                        # 按 index 维护多个 tool_call 增量（支持并行 tool_calls）
+                        if idx not in tc_list:
+                            tc_list[idx] = ToolCallDelta()
+                            tc_list[idx]._index = idx
                         if tc_delta.get("id"):
-                            current_tc.id = tc_delta["id"]
+                            tc_list[idx].id = tc_delta["id"]
                         if tc_delta.get("function", {}).get("name"):
-                            current_tc.name = tc_delta["function"]["name"]
+                            tc_list[idx].name = tc_delta["function"]["name"]
                         if tc_delta.get("function", {}).get("arguments"):
-                            current_tc.arguments += tc_delta["function"]["arguments"]
+                            tc_list[idx].arguments += tc_delta["function"]["arguments"]
                     elif tc_delta.get("id"):
-                        # 简化路径：单个 tool_call
-                        if current_tc is None:
-                            current_tc = ToolCallDelta()
+                        # 简化路径：单个 tool_call（无 index）
+                        # 用虚拟 index 0 存储
+                        if 0 not in tc_list:
+                            tc_list[0] = ToolCallDelta()
                         if tc_delta.get("id"):
-                            current_tc.id = tc_delta["id"]
+                            tc_list[0].id = tc_delta["id"]
                         if tc_delta.get("function", {}).get("name"):
-                            current_tc.name = tc_delta["function"]["name"]
+                            tc_list[0].name = tc_delta["function"]["name"]
                         if tc_delta.get("function", {}).get("arguments"):
-                            current_tc.arguments += tc_delta["function"]["arguments"]
+                            tc_list[0].arguments += tc_delta["function"]["arguments"]
 
                 # ── content 增量 ─────────────────────────────────────────
                 elif "content" in delta and delta["content"]:
@@ -427,11 +428,16 @@ class DeepSeekClient:
 
             # 流结束：汇总完整响应
             final_content = "".join(content_buf)
-            if current_tc is not None and current_tc.id:
-                current_tc.complete = True
-                tool_calls = [ToolCall.from_delta(current_tc)]
-            else:
-                tool_calls = None
+            tool_calls: Optional[List[ToolCall]] = None
+            if tc_list:
+                completed_tcs = []
+                for idx in sorted(tc_list.keys()):
+                    tc_delta = tc_list[idx]
+                    if tc_delta.id:  # 有 id 才是有效的 tool_call
+                        tc_delta.complete = True
+                        completed_tcs.append(ToolCall.from_delta(tc_delta))
+                if completed_tcs:
+                    tool_calls = completed_tcs
 
             yield Response(
                 content=final_content,
