@@ -289,6 +289,9 @@ def create_session(session_id: str, project: str, model: str, mode: str) -> Sess
         max_execution_time=600,
     )
 
+    from ..core.token_counter import CostTracker
+    s_cost_tracker = CostTracker(max_cost_usd=5.0)
+
     agent = AgentLoop(
         client=client,
         registry=registry,
@@ -303,6 +306,7 @@ def create_session(session_id: str, project: str, model: str, mode: str) -> Sess
         registry=registry,
         memory=memory,
         agent=agent,
+        cost_tracker=s_cost_tracker,
     )
 
 
@@ -689,7 +693,93 @@ async def get_cost(session_id: str):
     return {"session_id": session_id, "cost_usd": 0.0, "note": "Cost tracking active per session"}
 
 
+# ── v1.5.0: 模型分配端点 ──────────────────────────────────────────────────
+
+
+@app.post("/api/models/assign")
+async def assign_models(session_id: str, planner_model: str = "deepseek-reasoner", executor_model: str = "deepseek-chat"):
+    """设置会话的双模型（规划/执行）。"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    s = sessions[session_id]
+    s.agent.config.planner_model = planner_model
+    s.agent.config.executor_model = executor_model
+    return {"status": "ok", "planner_model": planner_model, "executor_model": executor_model}
+
+
+# ── v1.5.0: 工具裁剪端点 ──────────────────────────────────────────────────
+
+
+@app.post("/api/tools/prune")
+async def set_tool_pruning(session_id: str, level: int = 0):
+    """手动设置工具裁剪级别：0=全量, 1=精简, 2=核心。"""
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    s = sessions[session_id]
+    # 根据级别裁剪工具集
+    if level == 0:
+        # 恢复到全量（重新注册所有工具）
+        pass  # 保持现有注册状态
+    elif level == 1:
+        # 移除 verbose 工具（debug, benchmark, mutation test 等）
+        for name in ["debug_start", "debug_stop", "debug_step_over", "debug_step_into",
+                     "debug_get_variables", "debug_evaluate", "debug_continue",
+                     "benchmark", "mutate_test", "get_coverage"]:
+            s.registry.unregister(name)
+    elif level == 2:
+        # 仅保留核心工具
+        keep = {"read_file", "write_file", "edit_file", "list_directory",
+                "search_file", "search_content", "run_shell", "run_test",
+                "web_fetch", "git_diff", "git_log", "git_status",
+                "git_checkout", "git_commit", "git_push", "git_branch"}
+        for name in list(s.registry.list_tools()):
+            if name not in keep:
+                s.registry.unregister(name)
+    active = len(s.registry.list_tools())
+    return {"status": "ok", "level": level, "active_tools": active}
+
+
+# ── v1.5.0: 隐私过滤端点 ─────────────────────────────────────────────────
+
+
+@app.get("/api/privacy")
+async def get_privacy_settings():
+    from ..tools.security_privacy import is_privacy_enabled
+    return {"enabled": is_privacy_enabled()}
+
+
+@app.post("/api/privacy")
+async def set_privacy_settings(enabled: bool = False):
+    from ..tools.security_privacy import set_privacy_mode
+    set_privacy_mode(enabled)
+    return {"enabled": enabled, "status": "ok"}
+
+
+# ── v1.5.0: 预算设置端点 ──────────────────────────────────────────────────
+
+
+@app.get("/api/cost/settings")
+async def get_cost_settings(session_id: str):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    s = sessions[session_id]
+    if s.cost_tracker:
+        return {"max_cost_usd": s.cost_tracker.max_cost_usd}
+    return {"max_cost_usd": 5.0}
+
+
+@app.post("/api/cost/settings")
+async def set_cost_settings(session_id: str, max_cost_usd: float = 5.0):
+    if session_id not in sessions:
+        raise HTTPException(status_code=404, detail="Session not found")
+    s = sessions[session_id]
+    if s.cost_tracker:
+        s.cost_tracker.max_cost_usd = max_cost_usd
+    return {"status": "ok", "max_cost_usd": max_cost_usd}
+
+
 # ── 启动入口 ─────────────────────────────────────────────────────────────
+
 
 def run_server(host: str = "0.0.0.0", port: int = 8000):
     import uvicorn
