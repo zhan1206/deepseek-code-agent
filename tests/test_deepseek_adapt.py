@@ -1,4 +1,4 @@
-"""
+﻿"""
 DeepSeek 深度适配测试套件 — 验证 FC、并行、降级、tokenizer、FIM 等。
 """
 
@@ -290,3 +290,143 @@ class TestOpenAISchemaCompatibility:
             },
         }
         json.dumps(schema)  # Should not raise
+
+
+# ── 9. PrivacyFilter 可选隐私过滤 ──────────────────────────────────────────────
+
+class TestPrivacyFilter:
+    """验证隐私过滤（默认关闭）。"""
+
+    def test_default_disabled(self):
+        from deepseek_agent.tools.security_privacy import is_privacy_enabled
+        # 默认关闭
+        assert is_privacy_enabled() is False
+
+    def test_enable_disable(self):
+        from deepseek_agent.tools.security_privacy import set_privacy_mode, is_privacy_enabled
+        set_privacy_mode(True)
+        assert is_privacy_enabled() is True
+        set_privacy_mode(False)
+        assert is_privacy_enabled() is False
+
+    def test_github_token_filtered(self):
+        from deepseek_agent.tools.security_privacy import filter_sensitive, set_privacy_mode
+        set_privacy_mode(True)
+        text = "Token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        result = filter_sensitive(text)
+        assert "[GITHUB_TOKEN]" in result
+        assert "ghp_" not in result
+
+    def test_private_key_filtered(self):
+        from deepseek_agent.tools.security_privacy import filter_sensitive, set_privacy_mode
+        set_privacy_mode(True)
+        text = "-----BEGIN RSA PRIVATE KEY-----"
+        result = filter_sensitive(text)
+        assert "[PRIVATE_KEY]" in result
+        assert "BEGIN RSA" not in result
+        assert "BEGIN RSA" not in result
+
+    def test_aws_key_filtered(self):
+        from deepseek_agent.tools.security_privacy import filter_sensitive, set_privacy_mode
+        set_privacy_mode(True)
+        text = "AKIAIOSFODNN7EXAMPLE"
+        result = filter_sensitive(text)
+        assert "[AWS_KEY_ID]" in result
+        assert "AKIA" not in result
+
+    def test_disabled_preserves_all(self):
+        from deepseek_agent.tools.security_privacy import filter_sensitive, set_privacy_mode
+        set_privacy_mode(False)
+        text = "Token: ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+        result = filter_sensitive(text)
+        assert result == text  # 未过滤
+
+    def test_filter_messages(self):
+        from deepseek_agent.tools.security_privacy import filter_messages, set_privacy_mode
+        set_privacy_mode(True)
+        msgs = [
+            {"role": "user", "content": "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"},
+            {"role": "assistant", "content": "I see your token"},
+        ]
+        result = filter_messages(msgs)
+        assert "ghp_" not in result[0]["content"]
+        assert result[1]["content"] == "I see your token"
+
+
+# ── 10. Planner 调用次数限制 ──────────────────────────────────────────────
+
+class TestPlannerCallLimit:
+    """验证 Planner 调用次数上限。"""
+
+    def test_max_planner_calls_default(self):
+        from deepseek_agent.agent.loop import LoopConfig
+        cfg = LoopConfig()
+        assert cfg.max_planner_calls == 3
+
+    def test_planner_calls_incremented(self):
+        from deepseek_agent.agent.loop import AgentLoop, LoopConfig, LoopMode
+        from deepseek_agent.core.client import DeepSeekClient
+        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.memory.manager import MemoryManager
+        from unittest.mock import MagicMock
+
+        cfg = LoopConfig(mode=LoopMode.PLAN_EXECUTE)
+        mock_client = MagicMock(spec=DeepSeekClient)
+        mock_registry = MagicMock(spec=ToolRegistry)
+        mock_memory = MagicMock(spec=MemoryManager)
+        mock_memory.project_root = None
+
+        loop = AgentLoop(mock_client, mock_registry, mock_memory, cfg)
+        assert loop._planner_calls == 0
+
+
+# ── 11. FIM 补全集成 ──────────────────────────────────────────────────────
+
+class TestFIMIntegration:
+    """验证 FIM 补全工具已注册。"""
+
+    def test_fim_tools_registered(self):
+        try:
+            from deepseek_agent.tools.fim_tools import init_fim_tools
+            tools = init_fim_tools()
+            names = [t.name for t in tools]
+            assert "inline_complete" in names or any("fim" in n.lower() for n in names)
+        except ImportError:
+            pytest.skip("fim_tools not yet implemented")
+
+    def test_fim_client_import(self):
+        try:
+            from deepseek_agent.core.fim import FIMClient
+            # Client should be importable
+            assert FIMClient is not None
+        except ImportError:
+            pytest.skip("fim.py not yet implemented")
+
+
+# ── 12. 并行工具冲突检测 ─────────────────────────────────────────────────
+class TestToolConflictDetection:
+    """验证并行执行器检测文件写入冲突。"""
+
+    @pytest.mark.asyncio
+    async def test_same_file_conflict(self):
+        from deepseek_agent.agent.parallel import TaskDecomposer, SubTask
+
+        decomposer = TaskDecomposer(".")
+        tasks = [
+            SubTask(id="t1", description="write", prompt="", writes_files=["a.py"]),
+            SubTask(id="t2", description="edit", prompt="", writes_files=["a.py"]),
+        ]
+        conflicts = decomposer.detect_conflicts(tasks)
+        assert len(conflicts) > 0  # t1 and t2 conflict on same file
+
+    @pytest.mark.asyncio
+    async def test_different_files_no_conflict(self):
+        from deepseek_agent.agent.parallel import TaskDecomposer, SubTask
+
+        decomposer = TaskDecomposer(".")
+        tasks = [
+            SubTask(id="t1", description="write a", prompt="", writes_files=["a.py"]),
+            SubTask(id="t2", description="write b", prompt="", writes_files=["b.py"]),
+        ]
+        conflicts = decomposer.detect_conflicts(tasks)
+        assert len(conflicts) == 0

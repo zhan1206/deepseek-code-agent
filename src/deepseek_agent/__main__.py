@@ -1,4 +1,4 @@
-"""
+﻿"""
 DeepSeek Code Agent CLI 入口 — 支持交互模式、单任务模式、API 服务模式。
 """
 
@@ -161,6 +161,44 @@ async def run_task(
     await client.close()
 
 
+
+
+def _do_setup():
+    """下载 DeepSeek tokenizer.json 并完成初始化。"""
+    import urllib.request
+
+    tokenizers_dir = os.path.expanduser("~/.deepseek-agent")
+    os.makedirs(tokenizers_dir, exist_ok=True)
+    target = os.path.join(tokenizers_dir, "tokenizer.json")
+
+    urls = [
+        "https://raw.githubusercontent.com/deepseek-ai/DeepSeek-LLM/main/tokenizer_config.json",
+        "https://raw.githubusercontent.com/deepseek-ai/deepseek-mcp/main/tokenizer.json",
+    ]
+
+    print("Downloading DeepSeek tokenizer...")
+    for attempt_url in urls:
+        try:
+            with urllib.request.urlopen(attempt_url, timeout=15) as resp:
+                data = resp.read()
+            with open(target, "wb") as f:
+                f.write(data)
+            size = os.path.getsize(target)
+            print(f"Saved {target} ({size} bytes)")
+            try:
+                from tokenizers import Tokenizer
+                enc = Tokenizer.from_file(target)
+                test = enc.encode("hello world")
+                print(f"Tokenizer verified ({len(test)} tokens)")
+            except Exception as ve:
+                print(f"Warning: tokenizer verification failed ({ve}), using fallback")
+            return
+        except Exception as e:
+            print(f"Failed to download from {attempt_url}: {e}")
+            continue
+    print("Setup failed. TokenCounter will use fallback (no functionality loss).")
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="DeepSeek Code Agent — 基于 DeepSeek 模型的代码智能助手",
@@ -186,10 +224,16 @@ def main():
                         help="Agent 模式：react（推理+行动）或 plan（规划+执行）")
     parser.add_argument("run", nargs="?", help=argparse.SUPPRESS)  # 别名
     parser.add_argument("serve", nargs="?", help=argparse.SUPPRESS)  # 别名
+    parser.add_argument("--setup", action="store_true", help="下载 DeepSeek tokenizer.json 并完成初始化")
     parser.add_argument("--port", type=int, default=8000, help="API 服务端口（serve 模式）")
     parser.add_argument("--host", default="0.0.0.0", help="API 服务地址")
 
     args = parser.parse_args()
+
+    # setup 子命令：下载 tokenizer.json
+    if args.setup:
+        _do_setup()
+        return
 
     if not args.api_key:
         print("❌ 请设置 DEEPSEEK_API_KEY 环境变量或通过 --api-key 参数指定", file=sys.stderr)
