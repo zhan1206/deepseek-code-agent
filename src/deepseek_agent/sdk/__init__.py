@@ -21,7 +21,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 # 复用核心 tool 装饰器
-from ..tools.base import tool as _core_tool, Tool, ToolRegistry, DangerLevel
+from ..tools.registry import ToolRegistry
+from ..tools.base import tool as _core_tool, Tool, DangerLevel
 
 
 # ── SDK 接口 ─────────────────────────────────────────────────────────────

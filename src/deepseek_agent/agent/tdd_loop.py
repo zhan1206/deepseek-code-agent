@@ -14,7 +14,8 @@ from typing import Any, AsyncGenerator, Dict, List, Optional
 
 from .loop import AgentLoop, LoopConfig, LoopMode, TaskTracker, TaskStatus
 from ..core.client import DeepSeekClient, Response
-from ..tools.base import ToolRegistry, ToolResult
+from ..tools.registry import ToolRegistry
+from ..tools.base import ToolResult
 from ..memory.manager import MemoryManager
 from ..memory.checkpoint import CheckpointManager
 from ..tools.mutation import MutateCode

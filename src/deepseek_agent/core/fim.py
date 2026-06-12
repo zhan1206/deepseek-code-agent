@@ -13,7 +13,8 @@ from typing import Any, Dict, List, Optional
 
 import httpx
 
-from ..tools.base import ToolResult, ToolRegistry, DangerLevel, tool
+from ..tools.registry import ToolRegistry
+from ..tools.base import ToolResult, DangerLevel, tool
 
 
 @dataclass

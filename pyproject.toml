@@ -1,0 +1,120 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "deepseek-code-agent"
+version = "2.1.0"
+description = "DeepSeek Code Agent — 代码助手 + 安全沙箱"
+readme = "README.md"
+requires-python = ">=3.9"
+license = {text = "MIT"}
+authors = [
+    {name = "DeepSeek Team", email = "dev@deepseek.com"}
+]
+keywords = ["code-agent", "deepseek", "llm", "tool-use"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "httpx>=0.25.0",
+    "pydantic>=2.0",
+    "chromadb>=0.4.0",
+    "aiohttp>=3.9.0",
+    "tiktoken>=0.5.0",
+    "jsonschema>=4.20",
+    "pyyaml>=6.0",
+    "fastapi>=0.104.0",
+    "uvicorn>=0.24.0",
+    "websockets>=12.0",
+    "sse-starlette>=1.8.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-asyncio>=0.21.0",
+    "pytest-cov>=4.1.0",
+    "ruff>=0.1.0",
+    "mypy>=1.7.0",
+    "bandit>=1.7.0",
+    "pre-commit>=3.5.0",
+]
+docker = ["docker>=7.0.0"]
+sandbox = ["docker>=7.0.0"]
+
+[project.scripts]
+deepseek-agent = "deepseek_agent.__main__:main"
+
+[tool.setuptools]
+packages = ["deepseek_agent", "deepseek_agent.tools", "deepseek_agent.agent",
+            "deepseek_agent.core", "deepseek_agent.templates", "deepseek_agent.knowledge"]
+
+[tool.setuptools.package-data]
+"deepseek_agent.templates" = ["builtin/*.md"]
+
+[tool.coverage.run]
+branch = true
+source = ["deepseek_agent"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__pycache__/*",
+    "*/.venv/*",
+    "*/venv/*",
+    "*/node_modules/*",
+    "*/migrations/*",
+    "*/__main__.py",
+]
+
+[tool.coverage.report]
+precision = 2
+show_missing = true
+skip_covered = false
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+    "@abstractmethod",
+    "@abc.abstractmethod",
+    "if typing.TYPE_CHECKING:",
+    "except ImportError",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+ignore = ["E501", "B028", "UP007"]
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_ignores = true
+ignore_missing_imports = true
+exclude = ["tests/", "docs/", "build/", "dist/"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+asyncio_mode = "auto"
+addopts = "-ra -q --tb=short"
+
+[tool.bandit]
+targets = ["deepseek_agent"]
+skips = ["B101", "B413"]  # B101=assert_used (测试用), B413=blacklist (测试用 docker)

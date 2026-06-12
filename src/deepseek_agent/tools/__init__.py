@@ -1,5 +1,9 @@
 """Tools package."""
-from .base import Tool, ToolRegistry, ToolResult, DangerLevel, tool, generate_schema
+from .base import Tool, ToolResult, DangerLevel, tool, generate_schema, ToolCallSpec
+from .registry import ToolRegistry, OPTIONAL_PLUGINS
+from .pruning import ToolPruner, PruningLevel
+
+# 工具函数导入（按模块）
 from .fs import (
     read_file, write_file, edit_file, list_directory,
     search_file, search_content, delete_file,
@@ -18,12 +22,13 @@ from .mutation import MutateCode
 from .refactor import auto_refactor
 from .arch_check import arch_check
 from .benchmark import benchmark
-
 from .debug import debug_start, debug_continue, debug_step_over, debug_step_into, debug_get_variables, debug_evaluate, debug_stop
 
 __all__ = [
     # Base
-    "Tool", "ToolRegistry", "ToolResult", "DangerLevel", "tool", "generate_schema",
+    "Tool", "ToolRegistry", "ToolResult", "DangerLevel", "tool", "generate_schema", "ToolCallSpec",
+    # Registry & Pruning
+    "OPTIONAL_PLUGINS", "ToolPruner", "PruningLevel",
     # Filesystem
     "read_file", "write_file", "edit_file", "list_directory",
     "search_file", "search_content", "delete_file",

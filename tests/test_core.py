@@ -1,6 +1,7 @@
 """Phase 1 核心框架测试。"""
 import pytest
-from deepseek_agent.tools.base import tool, generate_schema, ToolRegistry, ToolResult, DangerLevel
+from deepseek_agent.tools.base import tool, generate_schema, ToolResult, DangerLevel
+from deepseek_agent.tools.registry import ToolRegistry
 
 
 class TestToolResult:

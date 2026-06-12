@@ -36,7 +36,8 @@ class TestParallelToolExecution:
 
     @pytest.mark.asyncio
     async def test_parallel_results_match_ids(self):
-        from deepseek_agent.tools.base import ToolRegistry, tool, DangerLevel
+        from deepseek_agent.tools.registry import ToolRegistry
+        from deepseek_agent.tools.base import tool, DangerLevel
 
         registry = ToolRegistry()
 
@@ -60,7 +61,8 @@ class TestParallelToolExecution:
 
     @pytest.mark.asyncio
     async def test_parallel_failure_isolation(self):
-        from deepseek_agent.tools.base import ToolRegistry, tool, DangerLevel
+        from deepseek_agent.tools.registry import ToolRegistry
+        from deepseek_agent.tools.base import tool, DangerLevel
 
         registry = ToolRegistry()
 
@@ -366,7 +368,7 @@ class TestPlannerCallLimit:
     def test_planner_calls_incremented(self):
         from deepseek_agent.agent.loop import AgentLoop, LoopConfig, LoopMode
         from deepseek_agent.core.client import DeepSeekClient
-        from deepseek_agent.tools.base import ToolRegistry
+        from deepseek_agent.tools.registry import ToolRegistry
         from deepseek_agent.memory.manager import MemoryManager
         from unittest.mock import MagicMock
 

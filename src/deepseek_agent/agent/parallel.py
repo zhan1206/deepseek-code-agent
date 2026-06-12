@@ -15,7 +15,8 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional, Set
 
 from .loop import AgentLoop, LoopConfig, LoopMode
 from ..core.client import DeepSeekClient
-from ..tools.base import ToolRegistry, ToolResult
+from ..tools.registry import ToolRegistry
+from ..tools.base import ToolResult
 from ..memory.manager import MemoryManager
 from ..knowledge.parser import CodeParser, SymbolTable
 from ..knowledge.graph import RelationGraph
