@@ -59,8 +59,9 @@ class TemplateChain:
 
 @dataclass
 class Template:
-    """A prompt & task template."""
+    """A prompt & task template with version support."""
     name: str
+    version: str = "1.0.0"          # SemVer 版本号
     description: str = ""
     category: str = "general"
     tools: List[str] = field(default_factory=list)
@@ -68,6 +69,7 @@ class Template:
     chain: TemplateChain = field(default_factory=TemplateChain)
     body: str = ""  # Markdown body with $variable placeholders
     source: str = ""  # File path the template was loaded from
+    variables: List[Dict] = field(default_factory=list)  # 定义模板变量 schema
 
     def render(self, **kwargs: str) -> str:
         """Render the template body, substituting $variable placeholders."""
@@ -79,11 +81,13 @@ class Template:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "name": self.name,
+            "version": self.version,
             "description": self.description,
             "category": self.category,
             "tools": self.tools,
             "context_budget": self.context_budget,
             "chain": self.chain.to_dict(),
+            "variables": self.variables,
             "body": self.body,
             "source": self.source,
         }
@@ -113,6 +117,7 @@ def _parse_template(text: str, source: str = "") -> Template:
 
     return Template(
         name=meta.get("name", Path(source).stem if source else "unnamed"),
+        version=meta.get("version", "1.0.0"),
         description=meta.get("description", ""),
         category=meta.get("category", "general"),
         tools=meta.get("tools", []),
@@ -120,6 +125,7 @@ def _parse_template(text: str, source: str = "") -> Template:
         chain=chain,
         body=body,
         source=source,
+        variables=meta.get("variables", []),
     )
 
 
@@ -157,6 +163,30 @@ class TemplateLoader:
                 continue
         return self._cache
 
+    def experiment(self, prompt_id: str, variants: List[str]) -> Template:
+        """
+        A/B 实验：随机选择一个模板变体用于渲染。
+
+        支持格式：
+        - prompt_id = "code-review/v2" → 加载特定版本
+        - prompt_id = "code-review" → 随机选择 variants 中的版本
+
+        使用步骤：
+        1. 在 templates/ 下创建 code-review/v1.md, code-review/v2.md
+        2. 调用 loader.experiment("code-review", ["v1", "v2"])
+        3. 渲染并记录 telemetry 指标
+        """
+        import random
+        if not variants:
+            return self.get(prompt_id) or Template(name=prompt_id)
+        chosen = random.choice(variants)
+        versioned_id = f"{prompt_id}/{chosen}"
+        tpl = self.get(versioned_id)
+        if tpl:
+            return tpl
+        # 回退到基础模板
+        return self.get(prompt_id) or Template(name=prompt_id, version=chosen)
+
     def get(self, name: str) -> Optional[Template]:
         """Get a template by name (loads all if not cached)."""
         if not self._cache:
@@ -188,10 +218,12 @@ class TemplateLoader:
         # Build YAML front-matter
         meta: Dict[str, Any] = {
             "name": template.name,
+            "version": template.version,
             "description": template.description,
             "category": template.category,
             "tools": template.tools,
             "context_budget": template.context_budget,
+            "variables": template.variables,
         }
         if template.chain.steps:
             meta["chain"] = [s.to_dict() for s in template.chain.steps]

@@ -76,6 +76,7 @@ class ContextBudget:
         self._entries: Dict[str, ContextEntry] = {}
         self._order: List[str] = []  # 插入顺序
         self._total_tokens: int = 0
+        self._tokenizer_model: str = "deepseek-chat"  # 用于 estimate_tokens
 
     # ── 增删 ──────────────────────────────────────────────────────────
 
@@ -266,3 +267,108 @@ class ContextBudget:
                     "content": entry.content,
                 })
         return messages
+
+    # ── 语义重要性评分（v1.5.0 新增）────────────────────────────────
+
+    def score_importance(self, entry: ContextEntry) -> float:
+        """
+        计算单条上下文的语义重要性分数（0.0 ~ 1.0）。
+
+        评分策略：
+        - system prompt: 1.0（不可删除）
+        - 当前用户任务: 0.9（核心上下文）
+        - 最新工具结果: 0.7（执行反馈）
+        - 早期工具结果: 0.4（历史参考）
+        - 历史对话: 0.3（可压缩）
+        - 包含关键词（error/fix/bug）: +0.1 加权
+        """
+        base_scores = {
+            ContextPriority.SYSTEM: 1.0,
+            ContextPriority.TASK: 0.9,
+            ContextPriority.TOOL_RESULT: 0.7,
+            ContextPriority.HISTORY: 0.3,
+        }
+        score = base_scores.get(entry.priority, 0.5)
+
+        # 关键词加权
+        keywords = ["error", "bug", "fix", "crash", "fail", "exception", "not found"]
+        content_lower = entry.content.lower()
+        for kw in keywords:
+            if kw in content_lower:
+                score = min(1.0, score + 0.1)
+                break
+
+        # 越新的消息越重要（时间衰减）
+        age_hours = (time.time() - entry.created_at) / 3600
+        if age_hours > 24:
+            score *= 0.8  # 超过 24 小时降低权重
+
+        return score
+
+    def compress(self, messages: List[Dict[str, str]]) -> List[Dict[str, str]]:
+        """
+        语义压缩：根据重要性分数智能裁剪，保留关键信息。
+
+        策略：
+        1. 计算每条消息的重要性分数
+        2. 按分数降序排列，优先保留高重要性消息
+        3. 超出预算时，低重要性消息被总结或丢弃
+        4. 恢复原始消息顺序
+        """
+        total_tokens = sum(estimate_tokens(m.get("content", "")) for m in messages)
+        if total_tokens <= self.config.max_tokens:
+            return messages
+
+        # 评分并排序
+        scored = []
+        for i, msg in enumerate(messages):
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            priority_map = {
+                "system": ContextPriority.SYSTEM,
+                "tool": ContextPriority.TOOL_RESULT,
+                "user": ContextPriority.TASK,
+                "assistant": ContextPriority.HISTORY,
+            }
+            priority = priority_map.get(role, ContextPriority.HISTORY)
+            entry = ContextEntry(
+                id=f"msg_{i}",
+                content=content,
+                priority=priority,
+                role=role,
+            )
+            score = self.score_importance(entry)
+            scored.append((i, msg, score, entry))
+
+        scored.sort(key=lambda x: x[2], reverse=True)
+
+        # 按分数从高到低选择，保留在预算内
+        result: List[Dict[str, str]] = []
+        current_tokens = 0
+        for i, msg, score, entry in scored:
+            tokens = estimate_tokens(msg.get("content", ""))
+            if current_tokens + tokens <= self.config.max_tokens:
+                result.append(msg)
+                current_tokens += tokens
+            elif score > 0.8 and entry.priority == ContextPriority.TOOL_RESULT:
+                # 高重要性工具结果：强制总结
+                summarized = self._summarize_single(entry)
+                summarized_tokens = estimate_tokens(summarized)
+                if current_tokens + summarized_tokens <= self.config.max_tokens:
+                    result.append({"role": msg["role"], "content": summarized})
+                    current_tokens += summarized_tokens
+
+        # 恢复原始顺序
+        result.sort(key=lambda m: next(
+            (i for i, orig in enumerate(messages) if orig.get("content") == m.get("content")),
+            0
+        ))
+        return result
+
+    def _summarize_single(self, entry: ContextEntry) -> str:
+        """对单条工具结果生成简短摘要。"""
+        MAX = 300
+        content = entry.content
+        if len(content) <= MAX:
+            return content
+        return content[:MAX] + f"\n... [已截断，原 {len(content)} 字符]"

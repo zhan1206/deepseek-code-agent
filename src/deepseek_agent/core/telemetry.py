@@ -181,16 +181,57 @@ class Tracer:
         }
 
     def _export_trace(self, trace: Trace) -> None:
-        """导出 trace 到本地文件"""
+        """导出 trace 到本地文件（含结构化 JSON 日志）"""
         try:
             Path(self.export_dir).mkdir(parents=True, exist_ok=True)
             ts = datetime.fromtimestamp(trace.start_time, tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
             filename = f"{ts}_{trace.trace_id[:8]}.json"
             filepath = os.path.join(self.export_dir, filename)
+
             with open(filepath, "w", encoding="utf-8") as f:
                 json.dump(trace.to_dict(), f, indent=2, ensure_ascii=False)
-        except Exception as e:
+
+            # 结构化事件日志（每行一条 JSON，便于 grep/解析）
+            event_log = os.path.join(self.export_dir, "events.jsonl")
+            with open(event_log, "a", encoding="utf-8") as ef:
+                for span in trace.spans:
+                    event = {
+                        "ts": datetime.fromtimestamp(span.start_time, tz=timezone.utc).isoformat(),
+                        "trace_id": trace.trace_id,
+                        "span_id": span.span_id,
+                        "name": span.name,
+                        "duration_ms": round(span.duration_ms, 2),
+                        "status": span.status,
+                        "attrs": span.attributes,
+                    }
+                    ef.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+
+        except Exception:
             # 静默失败，不影响主流程
+            pass
+
+    def log_event(self, event_name: str, level: str = "INFO", **attrs: Any) -> None:
+        """
+        记录结构化事件日志（写到 events.jsonl）。
+
+        级别：DEBUG / INFO / WARN / ERROR
+
+        示例：
+            tracer.log_event("tool_timeout", "WARN", tool="run_shell", duration_ms=5000)
+            tracer.log_event("budget_exceeded", "WARN", ratio=0.95, trimmed=3)
+        """
+        try:
+            Path(self.export_dir).mkdir(parents=True, exist_ok=True)
+            event_log = os.path.join(self.export_dir, "events.jsonl")
+            event = {
+                "ts": datetime.now(tz=timezone.utc).isoformat(),
+                "level": level.upper(),
+                "event": event_name,
+                **attrs,
+            }
+            with open(event_log, "a", encoding="utf-8") as ef:
+                ef.write(json.dumps(event, ensure_ascii=False, default=str) + "\n")
+        except Exception:
             pass
 
     def load_traces(self, limit: int = 20) -> List[Dict]:
