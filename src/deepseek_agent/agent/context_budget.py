@@ -58,6 +58,20 @@ class BudgetConfig:
     max_tool_result_chars: int = 2000    # 单条工具结果最大字符数
     history_summarize_threshold: int = 10  # 历史轮次超过此值触发总结
 
+    # ── 语义评分配置（v2.2 可配置化） ──────────────────────────────
+    importance_weights: Dict[str, float] = field(default_factory=lambda: {
+        "SYSTEM": 1.0,
+        "TASK": 0.9,
+        "TOOL_RESULT": 0.7,
+        "HISTORY": 0.3,
+    })
+    importance_keywords: List[str] = field(default_factory=lambda: [
+        "error", "bug", "fix", "crash", "fail", "exception", "not found",
+    ])
+    importance_keyword_boost: float = 0.1  # 每个匹配关键词的加分
+    age_decay_hours: float = 24.0          # 超过此时长降低权重
+    age_decay_factor: float = 0.8         # 衰减乘数
+
 
 # ── 预算管理器 ────────────────────────────────────────────────────────────
 
@@ -274,34 +288,22 @@ class ContextBudget:
         """
         计算单条上下文的语义重要性分数（0.0 ~ 1.0）。
 
-        评分策略：
-        - system prompt: 1.0（不可删除）
-        - 当前用户任务: 0.9（核心上下文）
-        - 最新工具结果: 0.7（执行反馈）
-        - 早期工具结果: 0.4（历史参考）
-        - 历史对话: 0.3（可压缩）
-        - 包含关键词（error/fix/bug）: +0.1 加权
+        评分策略基于 BudgetConfig 中可配置的权重、关键词和衰减参数。
         """
-        base_scores = {
-            ContextPriority.SYSTEM: 1.0,
-            ContextPriority.TASK: 0.9,
-            ContextPriority.TOOL_RESULT: 0.7,
-            ContextPriority.HISTORY: 0.3,
-        }
-        score = base_scores.get(entry.priority, 0.5)
+        cfg = self.config
+        score = cfg.importance_weights.get(entry.priority.name, 0.5)
 
         # 关键词加权
-        keywords = ["error", "bug", "fix", "crash", "fail", "exception", "not found"]
         content_lower = entry.content.lower()
-        for kw in keywords:
+        for kw in cfg.importance_keywords:
             if kw in content_lower:
-                score = min(1.0, score + 0.1)
+                score = min(1.0, score + cfg.importance_keyword_boost)
                 break
 
-        # 越新的消息越重要（时间衰减）
+        # 时间衰减
         age_hours = (time.time() - entry.created_at) / 3600
-        if age_hours > 24:
-            score *= 0.8  # 超过 24 小时降低权重
+        if age_hours > cfg.age_decay_hours:
+            score *= cfg.age_decay_factor
 
         return score
 

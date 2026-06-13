@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import os
 import re
+import time
 import yaml
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -96,6 +97,43 @@ class Template:
 _FRONT_MATTER_RE = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
 
+class ExperimentTracker:
+    """A/B 实验结果追踪器，记录每次实验的模板版本和效果指标。"""
+
+    def __init__(self):
+        self._results: List[Dict[str, Any]] = []
+
+    def record(self, prompt_id: str, variant: str, score: float, metadata: Optional[Dict] = None) -> None:
+        """记录一次实验结果。"""
+        self._results.append({
+            "prompt_id": prompt_id,
+            "variant": variant,
+            "score": score,
+            "metadata": metadata or {},
+            "timestamp": time.time(),
+        })
+
+    def summary(self, prompt_id: str) -> Dict[str, Any]:
+        """获取指定 prompt 的实验汇总（各版本平均分和样本数）。"""
+        relevant = [r for r in self._results if r["prompt_id"] == prompt_id]
+        if not relevant:
+            return {}
+        by_variant: Dict[str, List[float]] = {}
+        for r in relevant:
+            by_variant.setdefault(r["variant"], []).append(r["score"])
+        return {
+            v: {"count": len(scores), "avg_score": round(sum(scores) / len(scores), 3)}
+            for v, scores in by_variant.items()
+        }
+
+    def top_variant(self, prompt_id: str) -> Optional[str]:
+        """返回平均分最高的变体。"""
+        s = self.summary(prompt_id)
+        if not s:
+            return None
+        return max(s, key=lambda v: s[v]["avg_score"])
+
+
 def _parse_template(text: str, source: str = "") -> Template:
     """Parse a YAML front-matter + Markdown template string."""
     match = _FRONT_MATTER_RE.match(text)
@@ -135,6 +173,8 @@ class TemplateLoader:
     def __init__(self, template_dir: Optional[Path] = None):
         self.template_dir = template_dir or DEFAULT_TEMPLATE_DIR
         self._cache: Dict[str, Template] = {}
+        self._experiment_tracker = ExperimentTracker()
+        self._variant_weights: Dict[str, Dict[str, float]] = {}  # {prompt_id: {variant: weight}}
 
     def _ensure_dir(self) -> None:
         self.template_dir.mkdir(parents=True, exist_ok=True)
@@ -163,29 +203,59 @@ class TemplateLoader:
                 continue
         return self._cache
 
+    def set_weights(self, prompt_id: str, weights: Dict[str, float]) -> None:
+        """设置 A/B 实验变体权重分布（weights 之和不必为 1，自动归一化）。"""
+        self._variant_weights[prompt_id] = weights
+
     def experiment(self, prompt_id: str, variants: List[str]) -> Template:
         """
-        A/B 实验：随机选择一个模板变体用于渲染。
+        A/B 实验：根据权重随机选择模板变体（默认等权重）。
 
         支持格式：
         - prompt_id = "code-review/v2" → 加载特定版本
-        - prompt_id = "code-review" → 随机选择 variants 中的版本
+        - prompt_id = "code-review" → 按权重选择 variants 中的版本
+        - 未设置权重时使用均匀分布
 
         使用步骤：
-        1. 在 templates/ 下创建 code-review/v1.md, code-review/v2.md
-        2. 调用 loader.experiment("code-review", ["v1", "v2"])
-        3. 渲染并记录 telemetry 指标
+        1. 可选：loader.set_weights("code-review", {"v1": 0.7, "v2": 0.3})
+        2. 在 templates/ 下创建 code-review/v1.md, code-review/v2.md
+        3. 调用 loader.experiment("code-review", ["v1", "v2"])
+        4. 获取结果后调用 loader.record_outcome(prompt_id, chosen_variant, score)
         """
         import random
         if not variants:
             return self.get(prompt_id) or Template(name=prompt_id)
-        chosen = random.choice(variants)
+
+        weights = self._variant_weights.get(prompt_id, {})
+        if weights:
+            # 加权随机选择
+            w_list = [weights.get(v, 0.0) for v in variants]
+            total = sum(w_list)
+            if total == 0:
+                w_list = [1.0] * len(variants)
+                total = float(len(variants))
+            normalized = [w / total for w in w_list]
+            chosen = random.choices(variants, weights=normalized, k=1)[0]
+        else:
+            chosen = random.choice(variants)
+
         versioned_id = f"{prompt_id}/{chosen}"
         tpl = self.get(versioned_id)
         if tpl:
             return tpl
-        # 回退到基础模板
         return self.get(prompt_id) or Template(name=prompt_id, version=chosen)
+
+    def record_outcome(self, prompt_id: str, variant: str, score: float, metadata: Optional[Dict] = None) -> None:
+        """记录一次 A/B 实验结果。"""
+        self._experiment_tracker.record(prompt_id, variant, score, metadata)
+
+    def experiment_summary(self, prompt_id: str) -> Dict[str, Any]:
+        """获取指定 prompt 的 A/B 实验汇总。"""
+        return self._experiment_tracker.summary(prompt_id)
+
+    def top_variant(self, prompt_id: str) -> Optional[str]:
+        """返回平均分最高的实验变体。"""
+        return self._experiment_tracker.top_variant(prompt_id)
 
     def get(self, name: str) -> Optional[Template]:
         """Get a template by name (loads all if not cached)."""
